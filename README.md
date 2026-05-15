@@ -49,6 +49,7 @@ Press Enter or type 1 to use the default (mvp).
 
 ```
 Phase 1 — Planning    product-owner + dev-lead define requirements and architecture
+           Reporting  project-manager answers questions in project-status.md at checkpoints
 Phase 2 — Implement   developers build in parallel, reading the planning outputs
 Phase 3 — Validate    tester checks against requirements → STATUS: PASS or STATUS: FAIL
            Fix loop   if FAIL, developers fix only what failed (up to --max-fix-rounds)
@@ -83,23 +84,29 @@ python3 plugins/agent-teams/scripts/agent_team.py --task "build a CLI task manag
 --model gpt-5.5            # Codex model override
 --no-edit                  # disable file edits even in mvp/implement-plan mode
 --skip-peer-review         # skip peer review round (non-mvp modes)
+--pause-for-questions      # pause at PM checkpoints so you can add questions
 --dry-run                  # create workspace and prompts without running Codex
 --state-dir .agent-teams/runs
 ```
 
 ## Default Team
 
-Five teammates by default:
+Six teammates by default:
 
 ```
 product-owner    Requirements, users, scope, acceptance criteria       → planning phase
 dev-lead         Architecture, work breakdown, integration risks        → planning phase
+project-manager  Progress reports, blockers, stakeholder questions     → reporting checkpoints
 developer-1      First implementation area or primary code path         → implement phase
 developer-2      Second implementation area or adjacent integration     → implement phase
 tester           Validation, tests, acceptance checks, release risks    → validate phase
 ```
 
-Roles are assigned to phases automatically based on their name. Add up to 10 teammates with `--team-size`; larger teams add UX designer, security reviewer, DevOps engineer, second tester, and technical writer.
+The runner creates `questions.md` in each workspace. Add questions there while the team is running; the project-manager teammate answers them in `project-status.md` and `reports/` after major phase checkpoints. Use `--pause-for-questions` when you want the runner to stop at each checkpoint before the PM answers.
+
+Team communication is intentionally compact: `messages.md` keeps only key decisions, blockers, assumptions, and action requests that other teammates need. Full teammate output stays in `outbox/`, `reviews/`, `phases/`, and `reports/`.
+
+Roles are assigned to phases automatically based on their name. Add up to 11 teammates with `--team-size`; larger teams add UX designer, security reviewer, DevOps engineer, second tester, and technical writer.
 
 ## Custom Roles
 
@@ -152,11 +159,14 @@ task.md                          Original task and run settings
 roster.json                      Teammate status and return codes
 tasks.json                       Assignment details
 messages.md                      Indexed teammate messages
+questions.md                     Stakeholder questions for project-manager checkpoints
+project-status.md                Latest project-manager status and answers
 phases/planning/<name>.md        Planning phase outputs
 phases/implement/<name>.md       Implementation outputs
 phases/validate-0/<name>.md      Validation report (round 0)
 phases/fix-1/<name>.md           Fix round outputs (if needed)
 phases/validate-1/<name>.md      Re-validation after fix
+reports/<checkpoint>-<name>.md   Project-manager status reports and answers
 logs/<phase>-<name>.jsonl        Raw Codex JSONL events
 summary.md                       Final MVP delivery document
 ```

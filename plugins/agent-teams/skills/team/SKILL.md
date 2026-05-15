@@ -32,7 +32,7 @@ Check if the user already included `--mode` in `$ARGUMENTS`.
 
 ### Step 2 — Build the command
 
-Extract any additional flags the user included (`--team-size`, `--roles`, `--model`, `--max-fix-rounds`, `--no-edit`, `--dry-run`). Put only the plain task text in `--task`.
+Extract any additional flags the user included (`--team-size`, `--roles`, `--model`, `--max-fix-rounds`, `--no-edit`, `--pause-for-questions`, `--dry-run`). Put only the plain task text in `--task`.
 
 ```bash
 AGENT_TEAMS_SCRIPT="$(python3 - <<'PY'
@@ -77,7 +77,7 @@ When the script finishes:
 |---|---|---|
 | `mvp` | ✅ yes | Plan → implement → validate → fix loop → deliver. Default. |
 | `review` | ❌ no | Parallel team review with peer round and lead synthesis |
-| `research` | ❌ no | Lightweight discovery, defaults to 3 teammates |
+| `research` | ❌ no | Lightweight discovery, defaults to 4 teammates including project-manager |
 | `implement-plan` | ✅ yes | Implement an existing plan (requires `--allow-edit`) |
 
 ## MVP Pipeline
@@ -85,22 +85,28 @@ When the script finishes:
 When mode is `mvp`, the pipeline runs fully autonomously:
 
 1. **Planning** — product-owner + dev-lead define requirements and architecture (read-only)
-2. **Implementation** — developers build in parallel, reading planning outputs (edits on)
-3. **Validation** — tester checks against requirements → `STATUS: PASS` or `STATUS: FAIL`
-4. **Fix loop** — if fail, developers fix only what failed (up to `--max-fix-rounds`, default 2)
-5. **Synthesis** — lead writes the final MVP handoff document (`summary.md`)
+2. **Reporting checkpoints** — project-manager answers `questions.md` in `project-status.md`
+3. **Implementation** — developers build in parallel, reading planning outputs (edits on)
+4. **Validation** — tester checks against requirements → `STATUS: PASS` or `STATUS: FAIL`
+5. **Fix loop** — if fail, developers fix only what failed (up to `--max-fix-rounds`, default 2)
+6. **Synthesis** — lead writes the final MVP handoff document (`summary.md`)
 
 ## Default Team
 
 ```
 product-owner    Requirements, users, scope, acceptance criteria    → planning
 dev-lead         Architecture, work breakdown, integration risks    → planning
+project-manager  Progress, blockers, stakeholder questions          → reporting
 developer-1      First implementation area or primary code path     → implement
 developer-2      Second area or adjacent integration points         → implement
 tester           Validation, tests, acceptance checks, risks        → validate
 ```
 
-Use `--team-size` (up to 10) to expand. Larger teams add: UX designer, security reviewer, DevOps engineer, second tester, technical writer.
+Each run creates `questions.md`; add mid-run questions there and the project-manager answers them in `project-status.md` after phase checkpoints. Use `--pause-for-questions` when the user wants the runner to stop at each checkpoint before the project-manager answers.
+
+Keep team communication compact. Only key decisions, blockers, assumptions, and action requests should be passed between teammates through `Message to ...` sections. Do not forward verbose output; full details remain in source output files.
+
+Use `--team-size` (up to 11) to expand. Larger teams add: UX designer, security reviewer, DevOps engineer, second tester, technical writer.
 
 ## Options
 
@@ -114,6 +120,7 @@ Use `--team-size` (up to 10) to expand. Larger teams add: UX designer, security 
 --roles team.roles.json
 --model gpt-5.5
 --no-edit                  # disable edits even in mvp mode
+--pause-for-questions      # stop at reporting checkpoints for user questions
 --skip-peer-review
 --dry-run
 ```

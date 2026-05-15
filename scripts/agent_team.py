@@ -19,9 +19,9 @@ from typing import Any
 
 
 MODES = ("review", "research", "implement-plan", "mvp")
-DEFAULT_TEAM_SIZE = 5
-DEFAULT_RESEARCH_TEAM_SIZE = 3
-MAX_TEAM_SIZE = 10
+DEFAULT_TEAM_SIZE = 6
+DEFAULT_RESEARCH_TEAM_SIZE = 4
+MAX_TEAM_SIZE = 11
 MIN_TEAM_SIZE = 2
 STATUS_LOCK = Lock()
 
@@ -37,6 +37,12 @@ DEFAULT_ROLE_ARCHITECTURE = [
         "role": "Development lead",
         "objective": "Design the technical approach, implementation order, integration boundaries, and ownership split for: {task}",
         "deliverable": "Technical plan with architecture decisions, work breakdown, and integration risks.",
+    },
+    {
+        "name": "project-manager",
+        "role": "Project manager",
+        "objective": "Track progress, open questions, blockers, decisions, and cross-teammate communication for: {task}",
+        "deliverable": "Project status report that answers user questions and identifies next decisions or blockers.",
     },
     {
         "name": "developer-1",
@@ -152,6 +158,11 @@ def parse_args() -> argparse.Namespace:
         "--skip-peer-review",
         action="store_true",
         help="Skip the teammate peer-review round.",
+    )
+    parser.add_argument(
+        "--pause-for-questions",
+        action="store_true",
+        help="Pause at reporting checkpoints so you can add questions to questions.md before the project-manager answers.",
     )
     parser.add_argument(
         "--max-fix-rounds",
@@ -373,7 +384,8 @@ Final response requirements:
 - Start with your teammate name and status.
 - Summarize what you inspected or changed.
 - List concrete findings, file paths, risks, and validation results.
-- Mention anything another teammate or the lead must know.
+- Mention only key decisions, blockers, assumptions, or required actions another teammate or the lead must know.
+- Keep `Message to ...` sections short. Do not include verbose logs, full status dumps, or broad summaries there.
 """
 
 
@@ -410,7 +422,8 @@ Read:
 Peer review goals:
 - Find gaps, contradictions, duplicated assumptions, weak validation, and missed risks.
 - Identify where another teammate's output improves or changes your own conclusion.
-- Send concrete messages to teammates using `Message to <teammate-name>:` sections.
+- Send only concrete decisions or required actions using `Message to <teammate-name>:` sections.
+- Keep teammate messages brief. Do not forward verbose output or general commentary.
 - Prefer synthesis and quality improvement over style critique.
 
 Final response requirements:
@@ -447,18 +460,26 @@ Write a concise final synthesis that includes:
 """
 
 
+_REPORTING_KEYWORDS = frozenset({"project manager", "project-manager", "program manager", "reporting", "coordinator"})
 _PLANNING_KEYWORDS = frozenset({"owner", "lead", "architect", "ux", "design", "product"})
 _VALIDATION_KEYWORDS = frozenset({"test", "qa", "security", "audit"})
 
 
+def is_reporting_teammate(teammate: Teammate) -> bool:
+    key = (teammate.name + " " + teammate.role).lower()
+    return any(keyword in key for keyword in _REPORTING_KEYWORDS)
+
+
 def categorize_for_mvp(
     teammates: list[Teammate],
-) -> tuple[list[Teammate], list[Teammate], list[Teammate]]:
-    """Split teammates into (planning, implementation, validation) for the MVP pipeline."""
+) -> tuple[list[Teammate], list[Teammate], list[Teammate], list[Teammate]]:
+    """Split teammates into (reporting, planning, implementation, validation)."""
+    reporting = [t for t in teammates if is_reporting_teammate(t)]
+    phase_teammates = [t for t in teammates if not is_reporting_teammate(t)]
     planning: list[Teammate] = []
     implementation: list[Teammate] = []
     validation: list[Teammate] = []
-    for t in teammates:
+    for t in phase_teammates:
         key = (t.name + " " + t.role).lower()
         if any(k in key for k in _VALIDATION_KEYWORDS):
             validation.append(t)
@@ -466,15 +487,15 @@ def categorize_for_mvp(
             planning.append(t)
         else:
             implementation.append(t)
-    if not validation and teammates:
-        validation = [teammates[-1]]
-        implementation = [t for t in implementation if t.name != teammates[-1].name]
-    if not planning and len(teammates) > len(validation):
-        n = min(2, len(teammates) - len(validation))
-        planning = [t for t in teammates if t not in validation][:n]
+    if not validation and phase_teammates:
+        validation = [phase_teammates[-1]]
+        implementation = [t for t in implementation if t.name != phase_teammates[-1].name]
+    if not planning and len(phase_teammates) > len(validation):
+        n = min(2, len(phase_teammates) - len(validation))
+        planning = [t for t in phase_teammates if t not in validation][:n]
         planning_names = {t.name for t in planning}
         implementation = [t for t in implementation if t.name not in planning_names]
-    return planning, implementation, validation
+    return reporting, planning, implementation, validation
 
 
 def tester_passed(report_path: Path) -> bool:
@@ -613,6 +634,7 @@ Read every file in the workspace:
 - phases/implement/*.md — initial implementation outputs
 - phases/validate-*/*.md — validation reports per round
 - phases/fix-*/*.md — fix round outputs (if any)
+- reports/*.md — project-manager status reports and stakeholder Q&A
 - messages.md — team communication
 
 Write a concise MVP delivery report covering:
@@ -625,16 +647,107 @@ Be direct and actionable. This is the handoff document.
 """
 
 
+def project_manager_prompt(
+    run_dir: Path,
+    teammate: Teammate,
+    phase: str,
+    mode: str,
+    edit_allowed: bool,
+) -> str:
+    return f"""You are teammate `{teammate.name}`, the project manager for this Codex agent team.
+
+Role: {teammate.role}
+Mode: {mode}
+Edits allowed for delivery teammates: {edit_allowed}
+Current checkpoint: {phase}
+
+Read the shared workspace before answering:
+- {run_dir / "task.md"}
+- {run_dir / "tasks.json"}
+- {run_dir / "roster.json"}
+- {run_dir / "messages.md"}
+- {run_dir / "questions.md"}
+- all relevant files under {run_dir / "phases"}
+- prior reports under {run_dir / "reports"}
+
+Your job:
+- Give a concise project status update for the current checkpoint.
+- Answer any stakeholder questions listed in `questions.md`.
+- Call out blockers, risks, decisions made, and decisions still needed.
+- Route unresolved technical questions to the teammate best placed to answer them.
+- Forward only key decisions, blockers, and action requests to teammates.
+- Do not edit project code. This is reporting and coordination only.
+
+Final response requirements:
+- Start with `{teammate.name} status: {phase}`.
+- Include sections: Progress, Answers, Blockers/Risks, Next.
+- Use concrete paths and teammate names when useful.
+- If there are no open stakeholder questions, say so under Answers.
+- Include `Message to team:` only when the whole team needs to act on something, and keep it to key decisions/actions.
+"""
+
+
+def run_project_manager_reports(
+    args: argparse.Namespace,
+    run_dir: Path,
+    reporting: list[Teammate],
+    phase: str,
+    mode: str,
+    edit_allowed: bool,
+) -> None:
+    if not reporting:
+        return
+    reports_dir = run_dir / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    phase_slug = slugify(phase)
+    for teammate in reporting:
+        output = reports_dir / f"{phase_slug}-{teammate.name}.md"
+        latest = run_dir / "project-status.md"
+        if args.dry_run:
+            output.write_text(
+                f"{teammate.name} status: {phase}\n\nAnswers: No dry-run questions answered.\n",
+                encoding="utf-8",
+            )
+            latest.write_text(output.read_text(encoding="utf-8"), encoding="utf-8")
+            continue
+        update_status(run_dir, teammate.name, f"reporting-{phase_slug}")
+        rc = run_codex(
+            args,
+            project_manager_prompt(run_dir, teammate, phase, mode, edit_allowed),
+            output,
+            run_dir / "logs" / f"report-{phase_slug}-{teammate.name}.jsonl",
+        )
+        latest.write_text(output.read_text(encoding="utf-8", errors="replace"), encoding="utf-8")
+        append_messages_from_paths(run_dir, [output], f"report {phase}")
+        update_status(run_dir, teammate.name, "reporting-completed" if rc == 0 else "reporting-failed", rc)
+        print(f"  {teammate.name} report for {phase} done (rc={rc})")
+
+
+def pause_for_questions(args: argparse.Namespace, run_dir: Path, phase: str) -> None:
+    if not args.pause_for_questions or args.dry_run:
+        return
+    print(
+        "\nProject-manager checkpoint: "
+        f"{phase}. Add questions to {run_dir / 'questions.md'}, then press Enter to continue."
+    )
+    try:
+        input()
+    except EOFError:
+        print("No interactive input available; continuing without pausing.")
+
+
 def run_mvp_pipeline(
     args: argparse.Namespace,
     teammates: list[Teammate],
     run_dir: Path,
 ) -> int:
     max_fix_rounds: int = args.max_fix_rounds
-    planning, impl_team, validators = categorize_for_mvp(teammates)
+    edit_allowed = not args.no_edit
+    reporting, planning, impl_team, validators = categorize_for_mvp(teammates)
 
     print(
-        f"\nMVP pipeline: {len(planning)} planning | "
+        f"\nMVP pipeline: {len(reporting)} reporting | "
+        f"{len(planning)} planning | "
         f"{len(impl_team)} implementing | "
         f"{len(validators)} validating | "
         f"up to {max_fix_rounds} fix rounds"
@@ -667,6 +780,8 @@ def run_mvp_pipeline(
                 print(f"  {futures[future].name} done (rc={rc})")
 
     append_messages(run_dir, str(plan_dir.relative_to(run_dir)))
+    pause_for_questions(args, run_dir, "after planning")
+    run_project_manager_reports(args, run_dir, reporting, "after planning", args.mode, edit_allowed)
 
     # ── Phases 2+: Implement → Validate → Fix loop ────────────────────────────
     fix_round = 0
@@ -701,6 +816,8 @@ def run_mvp_pipeline(
                     print(f"  {futures[future].name} done (rc={rc})")
 
         append_messages(run_dir, str(impl_dir.relative_to(run_dir)))
+        pause_for_questions(args, run_dir, f"after {phase_key}")
+        run_project_manager_reports(args, run_dir, reporting, f"after {phase_key}", args.mode, edit_allowed)
 
         # ── Validation ────────────────────────────────────────────────────────
         val_label = f"validate-{fix_round}"
@@ -730,6 +847,8 @@ def run_mvp_pipeline(
                 print(f"  {v.name} done (rc={rc})")
 
         append_messages(run_dir, str(val_dir.relative_to(run_dir)))
+        pause_for_questions(args, run_dir, f"after {val_label}")
+        run_project_manager_reports(args, run_dir, reporting, f"after {val_label}", args.mode, edit_allowed)
 
         passed = all(tester_passed(val_dir / f"{v.name}.md") for v in validators)
 
@@ -821,9 +940,9 @@ def create_workspace(args: argparse.Namespace, team_size: int, edit_allowed: boo
     state_dir = Path(args.state_dir).expanduser()
     if not state_dir.is_absolute():
         state_dir = cwd / state_dir
-    run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + slugify(args.task)
+    run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns() % 1_000_000:06d}-{slugify(args.task)}"
     run_dir = state_dir / run_id
-    for child in ("inbox", "outbox", "reviews", "logs"):
+    for child in ("inbox", "outbox", "reviews", "logs", "reports", "phases"):
         (run_dir / child).mkdir(parents=True, exist_ok=True)
 
     task_md = f"""# Agent Team Task
@@ -841,7 +960,21 @@ Created: {time.strftime("%Y-%m-%d %H:%M:%S %z")}
     (run_dir / "messages.md").write_text(
         "# Team Messages\n\n"
         "Teammates communicate through `Message to <name>:` and `Message to team:` sections in outbox and review files. "
-        "The runner indexes those messages here after each round.\n",
+        "The runner indexes only compact key decisions, blockers, assumptions, and action requests here after each round. "
+        "Verbose output stays in the source report files.\n",
+        encoding="utf-8",
+    )
+    (run_dir / "questions.md").write_text(
+        "# Stakeholder Questions\n\n"
+        "Add questions here while the team is running. The project-manager teammate reads this file at phase checkpoints "
+        "and answers in `project-status.md` and `reports/`.\n\n"
+        "## Open Questions\n\n"
+        "- None yet.\n",
+        encoding="utf-8",
+    )
+    (run_dir / "project-status.md").write_text(
+        "# Project Status\n\n"
+        "The project-manager teammate updates this file after major phase checkpoints.\n",
         encoding="utf-8",
     )
     return run_dir
@@ -918,9 +1051,25 @@ def run_teammate(
     return teammate.name, returncode
 
 
-def extract_messages(run_dir: Path, source_dir: str) -> list[str]:
+def compact_message(message: str, max_lines: int = 8, max_chars: int = 1200) -> str:
+    lines = [line.rstrip() for line in message.strip().splitlines()]
+    kept: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped and (not kept or not kept[-1]):
+            continue
+        kept.append(line)
+        if len(kept) >= max_lines:
+            break
+    compact = "\n".join(kept).strip()
+    if len(compact) > max_chars:
+        compact = compact[: max_chars - 3].rstrip() + "..."
+    return compact
+
+
+def extract_messages_from_paths(paths: list[Path]) -> list[str]:
     messages: list[str] = []
-    for path in sorted((run_dir / source_dir).glob("*.md")):
+    for path in sorted(paths):
         text = path.read_text(encoding="utf-8", errors="replace")
         current: list[str] = []
         capture = False
@@ -941,17 +1090,25 @@ def extract_messages(run_dir: Path, source_dir: str) -> list[str]:
                     current.append(line)
         if current:
             messages.append("\n".join(current).strip())
-    return [message for message in messages if message]
+    return [compact_message(message) for message in messages if message]
 
 
-def append_messages(run_dir: Path, source_dir: str) -> None:
-    messages = extract_messages(run_dir, source_dir)
+def append_messages_from_paths(run_dir: Path, paths: list[Path], source_label: str) -> None:
+    messages = extract_messages_from_paths(paths)
     if not messages:
         return
     with (run_dir / "messages.md").open("a", encoding="utf-8") as file:
-        file.write(f"\n## Messages from {source_dir}\n\n")
+        file.write(f"\n## Messages from {source_label}\n\n")
         for message in messages:
             file.write(message.strip() + "\n\n")
+
+
+def extract_messages(run_dir: Path, source_dir: str) -> list[str]:
+    return extract_messages_from_paths(list((run_dir / source_dir).glob("*.md")))
+
+
+def append_messages(run_dir: Path, source_dir: str) -> None:
+    append_messages_from_paths(run_dir, list((run_dir / source_dir).glob("*.md")), source_dir)
 
 
 def run_peer_review(
@@ -1074,6 +1231,9 @@ def main() -> int:
             print(f"Teammate {name} finished with return code {returncode}")
 
     append_messages(run_dir, "outbox")
+    reporting = [teammate for teammate in teammates if is_reporting_teammate(teammate)]
+    pause_for_questions(args, run_dir, "after teammate round")
+    run_project_manager_reports(args, run_dir, reporting, "after teammate round", args.mode, edit_allowed)
 
     if not args.skip_peer_review:
         print("Starting teammate peer-review round.")
@@ -1086,6 +1246,8 @@ def main() -> int:
                 name, returncode = future.result()
                 print(f"Peer review {name} finished with return code {returncode}")
         append_messages(run_dir, "reviews")
+        pause_for_questions(args, run_dir, "after peer review")
+        run_project_manager_reports(args, run_dir, reporting, "after peer review", args.mode, edit_allowed)
 
     summary = run_dir / "summary.md"
     summary_log = run_dir / "logs" / "lead-summary.jsonl"
