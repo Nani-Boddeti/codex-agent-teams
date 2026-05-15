@@ -29,6 +29,148 @@ STATUS_LOCK = Lock()
 TIMEOUT_RETURN_CODE = 124
 TERMINATION_GRACE_SECONDS = 5
 
+
+def _status_pct(status: str) -> int:
+    """Return 0 (pending), 50 (in-progress), or 100 (terminal) for a teammate status."""
+    if status == "pending":
+        return 0
+    if status == "dry-run" or status.endswith(("-completed", "-dry-run", "-failed", "-timed-out")):
+        return 100
+    return 50
+
+
+def _status_is_healthy_terminal(status: str) -> bool:
+    return status == "dry-run" or status.endswith(("-completed", "-dry-run"))
+
+
+def _status_is_failed(status: str) -> bool:
+    return status.endswith("-failed")
+
+
+def _status_is_timed_out(status: str) -> bool:
+    return status.endswith("-timed-out")
+
+
+def _status_is_running(status: str) -> bool:
+    return "running" in status
+
+
+def _find_latest_pm_report(run_dir: Path) -> str | None:
+    pm_status = run_dir / "project-status.md"
+    if pm_status.exists() and pm_status.stat().st_size > 0:
+        return str(pm_status)
+    reports_dir = run_dir / "reports"
+    if reports_dir.exists():
+        files = sorted(reports_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if files:
+            return str(files[0])
+    return None
+
+
+def write_dashboard(run_dir: Path, roster: dict[str, Any]) -> None:
+    """Write dashboard.json and dashboard.md; print a compact progress line to stderr."""
+    teammates = roster.get("teammates", [])
+    current_phase = roster.get("current_phase", "unknown")
+    total = len(teammates)
+    if total == 0:
+        return
+
+    counts: dict[str, int] = {"total": total, "pending": 0, "running": 0, "completed": 0, "failed": 0, "timed_out": 0}
+    active_agents: list[str] = []
+    failed_agents: list[str] = []
+    timed_out_agents: list[str] = []
+    rows: list[dict[str, Any]] = []
+    pct_sum = 0
+
+    for t in teammates:
+        status = t["status"]
+        pct = _status_pct(status)
+        pct_sum += pct
+        healthy = not (_status_is_failed(status) or _status_is_timed_out(status))
+        rows.append({"name": t["name"], "role": t.get("role", ""), "status": status, "pct": pct, "healthy": healthy})
+        if _status_is_failed(status):
+            counts["failed"] += 1
+            failed_agents.append(t["name"])
+        elif _status_is_timed_out(status):
+            counts["timed_out"] += 1
+            timed_out_agents.append(t["name"])
+        elif _status_is_healthy_terminal(status):
+            counts["completed"] += 1
+        elif _status_is_running(status):
+            counts["running"] += 1
+            active_agents.append(t["name"])
+        else:
+            counts["pending"] += 1
+
+    overall_pct = pct_sum // total
+    latest_pm = _find_latest_pm_report(run_dir)
+    updated_at = time.strftime("%Y-%m-%d %H:%M:%S %z")
+
+    # dashboard.json
+    dashboard_data: dict[str, Any] = {
+        "current_phase": current_phase,
+        "overall_pct": overall_pct,
+        "updated_at": updated_at,
+        "counts": counts,
+        "active_agents": active_agents,
+        "unhealthy_agents": failed_agents + timed_out_agents,
+        "latest_pm_report": latest_pm,
+        "teammates": rows,
+    }
+    (run_dir / "dashboard.json").write_text(json.dumps(dashboard_data, indent=2) + "\n", encoding="utf-8")
+
+    # dashboard.md
+    md_lines = [
+        "# Agent Team Dashboard",
+        "",
+        f"Updated: {updated_at}  ",
+        f"Phase: {current_phase}",
+        "",
+        f"## Overall Progress: {overall_pct}%",
+        "",
+        "## Team Status",
+        "",
+        "| Teammate | Role | Status | % | Health |",
+        "|---|---|---|---|---|",
+    ]
+    for row in rows:
+        health = "ok" if row["healthy"] else ("failed" if _status_is_failed(row["status"]) else "timed-out")
+        md_lines.append(f"| {row['name']} | {row['role']} | {row['status']} | {row['pct']}% | {health} |")
+    md_lines += [
+        "",
+        "## Counts",
+        f"- Total: {counts['total']}",
+        f"- Completed: {counts['completed']}",
+        f"- Running: {counts['running']}",
+        f"- Pending: {counts['pending']}",
+        f"- Failed: {counts['failed']}",
+        f"- Timed out: {counts['timed_out']}",
+    ]
+    if latest_pm:
+        md_lines += ["", "## Latest PM Report", f"`{latest_pm}`"]
+    (run_dir / "dashboard.md").write_text("\n".join(md_lines) + "\n", encoding="utf-8")
+
+    # Compact progress line
+    parts = [f"Progress: {overall_pct}%", f"phase: {current_phase}"]
+    parts.append(f"running: {', '.join(active_agents) if active_agents else 'none'}")
+    if failed_agents:
+        parts.append(f"failed: {', '.join(failed_agents)}")
+    if timed_out_agents:
+        parts.append(f"timed-out: {', '.join(timed_out_agents)}")
+    if not failed_agents and not timed_out_agents:
+        parts.append("blocked: none")
+    print(" | ".join(parts), file=sys.stderr)
+
+
+def update_phase(run_dir: Path, phase: str) -> None:
+    """Update current_phase in roster.json and refresh the dashboard."""
+    with STATUS_LOCK:
+        roster_path = run_dir / "roster.json"
+        roster = read_json(roster_path)
+        roster["current_phase"] = phase
+        write_json(roster_path, roster)
+        write_dashboard(run_dir, roster)
+
 DEFAULT_ROLE_ARCHITECTURE = [
     {
         "name": "product-owner",
@@ -875,6 +1017,7 @@ def run_mvp_pipeline(
 
     # ── Phase 1: Planning ──────────────────────────────────────────────────────
     print("\n=== Phase 1: Planning ===")
+    update_phase(run_dir, "planning")
     plan_dir = run_dir / "phases" / "planning"
     plan_dir.mkdir(parents=True, exist_ok=True)
 
@@ -915,6 +1058,7 @@ def run_mvp_pipeline(
     while True:
         phase_key = f"fix-{fix_round}" if fix_round else "implement"
         print(f"\n=== {'Fix Round ' + str(fix_round) if fix_round else 'Phase 2: Implementation'} ===")
+        update_phase(run_dir, phase_key)
         impl_dir = run_dir / "phases" / phase_key
         impl_dir.mkdir(parents=True, exist_ok=True)
 
@@ -950,6 +1094,7 @@ def run_mvp_pipeline(
         # ── Validation ────────────────────────────────────────────────────────
         val_label = f"validate-{fix_round}"
         print(f"\n=== Validation (round {fix_round}) ===")
+        update_phase(run_dir, val_label)
         val_dir = run_dir / "phases" / val_label
         val_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1000,6 +1145,7 @@ def run_mvp_pipeline(
 
     # ── Final synthesis ────────────────────────────────────────────────────────
     print("\n=== Final Synthesis ===")
+    update_phase(run_dir, "synthesis")
     summary = run_dir / "summary.md"
     summary_log = run_dir / "logs" / "lead-summary.jsonl"
 
@@ -1159,6 +1305,7 @@ def update_status(run_dir: Path, name: str, status: str, returncode: int | None 
             if teammate["name"] == name:
                 teammate["status"] = status
         write_json(tasks_path, tasks)
+        write_dashboard(run_dir, roster)
 
 
 def run_teammate(
@@ -1337,6 +1484,8 @@ def main() -> int:
 
     write_assignments(run_dir, teammates)
     roster = {
+        "current_phase": "initializing",
+        "started_at": time.strftime("%Y-%m-%d %H:%M:%S %z"),
         "run_dir": str(run_dir),
         "mode": args.mode,
         "edit_allowed": edit_allowed,
@@ -1351,6 +1500,7 @@ def main() -> int:
         ],
     }
     write_json(run_dir / "roster.json", roster)
+    write_dashboard(run_dir, roster)
 
     if args.mode == "mvp":
         return run_mvp_pipeline(args, teammates, run_dir)
@@ -1360,6 +1510,7 @@ def main() -> int:
     if not execution_teammates:
         execution_teammates = teammates
 
+    update_phase(run_dir, "teammate-run")
     teammate_results: dict[str, int] = {}
     with ThreadPoolExecutor(max_workers=len(execution_teammates)) as executor:
         futures = [
@@ -1380,6 +1531,7 @@ def main() -> int:
     ]
     if not args.skip_peer_review and len(review_teammates) > 1:
         print("Starting teammate peer-review round.")
+        update_phase(run_dir, "peer-review")
         with ThreadPoolExecutor(max_workers=len(review_teammates)) as executor:
             futures = [
                 executor.submit(run_peer_review, args, run_dir, teammate, review_teammates, edit_allowed)
@@ -1394,6 +1546,7 @@ def main() -> int:
     elif not args.skip_peer_review:
         print("Skipping peer review; fewer than two teammates completed the worker round successfully.")
 
+    update_phase(run_dir, "synthesis")
     summary = run_dir / "summary.md"
     summary_log = run_dir / "logs" / "lead-summary.jsonl"
     if args.dry_run:
