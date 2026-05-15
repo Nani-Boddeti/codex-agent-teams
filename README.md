@@ -82,6 +82,8 @@ python3 plugins/agent-teams/scripts/agent_team.py --task "build a CLI task manag
 --team-size 7              # number of teammates, or 'auto'
 --roles team.roles.json    # custom role profile (JSON file or inline JSON)
 --model gpt-5.5            # Codex model override
+--agent-timeout-seconds 1800 # stop any one agent after this wall-clock time
+--idle-timeout-seconds 600   # stop any one agent after no output for this long
 --no-edit                  # disable file edits even in mvp/implement-plan mode
 --skip-peer-review         # skip peer review round (non-mvp modes)
 --pause-for-questions      # pause at PM checkpoints so you can add questions
@@ -105,6 +107,8 @@ tester           Validation, tests, acceptance checks, release risks    → vali
 The runner creates `questions.md` in each workspace. Add questions there while the team is running; the project-manager teammate answers them in `project-status.md` and `reports/` after major phase checkpoints. Use `--pause-for-questions` when you want the runner to stop at each checkpoint before the PM answers.
 
 Team communication is intentionally compact: `messages.md` keeps only key decisions, blockers, assumptions, and action requests that other teammates need. Full teammate output stays in `outbox/`, `reviews/`, `phases/`, and `reports/`.
+
+Long-running or stuck agents are bounded. By default, each Codex subprocess is stopped after 30 minutes total or 10 minutes without output. Timeouts are recorded in the relevant output file, raw log, `tasks.json`, and `roster.json`.
 
 Roles are assigned to phases automatically based on their name. Add up to 11 teammates with `--team-size`; larger teams add UX designer, security reviewer, DevOps engineer, second tester, and technical writer.
 

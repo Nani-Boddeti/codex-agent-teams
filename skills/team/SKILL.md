@@ -32,7 +32,7 @@ Check if the user already included `--mode` in `$ARGUMENTS`.
 
 ### Step 2 — Build the command
 
-Extract any additional flags the user included (`--team-size`, `--roles`, `--model`, `--max-fix-rounds`, `--no-edit`, `--pause-for-questions`, `--dry-run`). Put only the plain task text in `--task`.
+Extract any additional flags the user included (`--team-size`, `--roles`, `--model`, `--max-fix-rounds`, `--agent-timeout-seconds`, `--idle-timeout-seconds`, `--no-edit`, `--pause-for-questions`, `--dry-run`). Put only the plain task text in `--task`.
 
 ```bash
 AGENT_TEAMS_SCRIPT="$(python3 - <<'PY'
@@ -106,6 +106,8 @@ Each run creates `questions.md`; add mid-run questions there and the project-man
 
 Keep team communication compact. Only key decisions, blockers, assumptions, and action requests should be passed between teammates through `Message to ...` sections. Do not forward verbose output; full details remain in source output files.
 
+Stuck agents are bounded. The runner stops any Codex subprocess after `--agent-timeout-seconds` wall-clock time (default 1800) or `--idle-timeout-seconds` without output (default 600), then records a timeout status in `roster.json`.
+
 Use `--team-size` (up to 11) to expand. Larger teams add: UX designer, security reviewer, DevOps engineer, second tester, technical writer.
 
 ## Options
@@ -119,6 +121,8 @@ Use `--team-size` (up to 11) to expand. Larger teams add: UX designer, security 
 --team-size 7
 --roles team.roles.json
 --model gpt-5.5
+--agent-timeout-seconds 1800
+--idle-timeout-seconds 600
 --no-edit                  # disable edits even in mvp mode
 --pause-for-questions      # stop at reporting checkpoints for user questions
 --skip-peer-review

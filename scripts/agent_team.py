@@ -7,6 +7,8 @@ import argparse
 import json
 import os
 import re
+import select
+import signal
 import shutil
 import subprocess
 import sys
@@ -24,6 +26,8 @@ DEFAULT_RESEARCH_TEAM_SIZE = 4
 MAX_TEAM_SIZE = 11
 MIN_TEAM_SIZE = 2
 STATUS_LOCK = Lock()
+TIMEOUT_RETURN_CODE = 124
+TERMINATION_GRACE_SECONDS = 5
 
 DEFAULT_ROLE_ARCHITECTURE = [
     {
@@ -121,7 +125,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--team-size",
         default="auto",
-        help="Number of teammates to launch, or 'auto'. Bounded to 2-10.",
+        help="Number of teammates to launch, or 'auto'. Bounded to 2-11.",
     )
     parser.add_argument(
         "--roles",
@@ -163,6 +167,18 @@ def parse_args() -> argparse.Namespace:
         "--pause-for-questions",
         action="store_true",
         help="Pause at reporting checkpoints so you can add questions to questions.md before the project-manager answers.",
+    )
+    parser.add_argument(
+        "--agent-timeout-seconds",
+        type=int,
+        default=1800,
+        help="Maximum wall-clock seconds for each Codex agent subprocess. Use 0 to disable.",
+    )
+    parser.add_argument(
+        "--idle-timeout-seconds",
+        type=int,
+        default=600,
+        help="Maximum seconds without agent output before the subprocess is stopped. Use 0 to disable.",
     )
     parser.add_argument(
         "--max-fix-rounds",
@@ -264,6 +280,50 @@ def codex_base_command(args: argparse.Namespace) -> list[str]:
     return cmd
 
 
+def _positive_timeout(value: int, name: str) -> int:
+    if value < 0:
+        raise SystemExit(f"{name} must be 0 or greater")
+    return value
+
+
+def terminate_process(proc: subprocess.Popen[str], log_file: Any, reason: str) -> None:
+    message = f"\n[agent-teams] stopping Codex subprocess: {reason}\n"
+    log_file.write(message)
+    log_file.flush()
+    print(message, end="", file=sys.stderr)
+
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except Exception:
+        proc.terminate()
+
+    try:
+        proc.wait(timeout=TERMINATION_GRACE_SECONDS)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    except Exception:
+        proc.kill()
+    proc.wait()
+
+
+def write_timeout_output(output_path: Path, reason: str) -> None:
+    if output_path.exists() and output_path.stat().st_size > 0:
+        return
+    output_path.write_text(
+        "STATUS: TIMED OUT\n\n"
+        f"The Codex agent subprocess was stopped by Agent Teams: {reason}\n",
+        encoding="utf-8",
+    )
+
+
 def run_codex(
     args: argparse.Namespace,
     prompt: str,
@@ -282,14 +342,50 @@ def run_codex(
         encoding="utf-8",
         errors="replace",
         bufsize=1,
+        start_new_session=True,
     ) as proc:
         assert proc.stdin is not None
         proc.stdin.write(prompt)
         proc.stdin.close()
 
+        started_at = time.monotonic()
+        last_output_at = started_at
+        wall_timeout = _positive_timeout(args.agent_timeout_seconds, "--agent-timeout-seconds")
+        idle_timeout = _positive_timeout(args.idle_timeout_seconds, "--idle-timeout-seconds")
         with log_path.open("w", encoding="utf-8") as log_file:
             assert proc.stdout is not None
-            for line in proc.stdout:
+            while True:
+                now = time.monotonic()
+                if wall_timeout and now - started_at > wall_timeout:
+                    reason = f"wall-clock timeout after {wall_timeout}s"
+                    terminate_process(proc, log_file, reason)
+                    write_timeout_output(output_path, reason)
+                    return TIMEOUT_RETURN_CODE
+                if idle_timeout and now - last_output_at > idle_timeout:
+                    reason = f"idle timeout after {idle_timeout}s without output"
+                    terminate_process(proc, log_file, reason)
+                    write_timeout_output(output_path, reason)
+                    return TIMEOUT_RETURN_CODE
+
+                if proc.poll() is not None:
+                    for line in proc.stdout:
+                        log_file.write(line)
+                        print(line, end="")
+                    log_file.flush()
+                    break
+
+                timeout_candidates = [1.0]
+                if wall_timeout:
+                    timeout_candidates.append(max(0.0, wall_timeout - (now - started_at)))
+                if idle_timeout:
+                    timeout_candidates.append(max(0.0, idle_timeout - (now - last_output_at)))
+                ready, _, _ = select.select([proc.stdout], [], [], min(timeout_candidates))
+                if not ready:
+                    continue
+                line = proc.stdout.readline()
+                if not line:
+                    continue
+                last_output_at = time.monotonic()
                 log_file.write(line)
                 log_file.flush()
                 print(line, end="")
@@ -709,6 +805,7 @@ def run_project_manager_reports(
                 encoding="utf-8",
             )
             latest.write_text(output.read_text(encoding="utf-8"), encoding="utf-8")
+            update_status(run_dir, teammate.name, f"reporting-{phase_slug}-dry-run", 0)
             continue
         update_status(run_dir, teammate.name, f"reporting-{phase_slug}")
         rc = run_codex(
@@ -734,6 +831,29 @@ def pause_for_questions(args: argparse.Namespace, run_dir: Path, phase: str) -> 
         input()
     except EOFError:
         print("No interactive input available; continuing without pausing.")
+
+
+def status_from_returncode(phase: str, returncode: int) -> str:
+    if returncode == 0:
+        return f"{phase}-completed"
+    if returncode == TIMEOUT_RETURN_CODE:
+        return f"{phase}-timed-out"
+    return f"{phase}-failed"
+
+
+def run_phase_agent(
+    args: argparse.Namespace,
+    run_dir: Path,
+    teammate: Teammate,
+    phase: str,
+    prompt: str,
+    output_path: Path,
+    log_path: Path,
+) -> int:
+    update_status(run_dir, teammate.name, f"{phase}-running")
+    returncode = run_codex(args, prompt, output_path, log_path)
+    update_status(run_dir, teammate.name, status_from_returncode(phase, returncode), returncode)
+    return returncode
 
 
 def run_mvp_pipeline(
@@ -763,12 +883,16 @@ def run_mvp_pipeline(
             (plan_dir / f"{t.name}.md").write_text(
                 f"Dry-run planning output for {t.name}.\n", encoding="utf-8"
             )
+            update_status(run_dir, t.name, "planning-dry-run", 0)
     else:
         with ThreadPoolExecutor(max_workers=max(1, len(planning))) as executor:
             futures = {
                 executor.submit(
-                    run_codex,
+                    run_phase_agent,
                     args,
+                    run_dir,
+                    t,
+                    "planning",
                     _mvp_planning_prompt(run_dir, t, args.task),
                     plan_dir / f"{t.name}.md",
                     run_dir / "logs" / f"plan-{t.name}.jsonl",
@@ -799,12 +923,16 @@ def run_mvp_pipeline(
                 (impl_dir / f"{t.name}.md").write_text(
                     f"Dry-run implementation for {t.name}.\n", encoding="utf-8"
                 )
+                update_status(run_dir, t.name, f"{phase_key}-dry-run", 0)
         else:
             with ThreadPoolExecutor(max_workers=max(1, len(impl_team))) as executor:
                 futures = {
                     executor.submit(
-                        run_codex,
+                        run_phase_agent,
                         args,
+                        run_dir,
+                        t,
+                        phase_key,
                         _mvp_implement_prompt(run_dir, t, plan_dir, fix_round, tester_report),
                         impl_dir / f"{t.name}.md",
                         run_dir / "logs" / f"{phase_key}-{t.name}.jsonl",
@@ -835,10 +963,14 @@ def run_mvp_pipeline(
                 (val_dir / f"{v.name}.md").write_text(
                     "Dry-run validation.\nSTATUS: PASS\n", encoding="utf-8"
                 )
+                update_status(run_dir, v.name, f"{val_label}-dry-run", 0)
         else:
             for v in validators:
-                rc = run_codex(
+                rc = run_phase_agent(
                     args,
+                    run_dir,
+                    v,
+                    val_label,
                     _mvp_validation_prompt(run_dir, v, impl_dirs, fix_round),
                     val_dir / f"{v.name}.md",
                     run_dir / "logs" / f"{val_label}-{v.name}.jsonl",
@@ -1047,7 +1179,7 @@ def run_teammate(
         update_status(run_dir, teammate.name, "dry-run", 0)
         return teammate.name, 0
     returncode = run_codex(args, prompt, outbox, log)
-    update_status(run_dir, teammate.name, "completed" if returncode == 0 else "failed", returncode)
+    update_status(run_dir, teammate.name, status_from_returncode("teammate", returncode), returncode)
     return teammate.name, returncode
 
 
@@ -1133,7 +1265,7 @@ def run_peer_review(
     update_status(
         run_dir,
         reviewer.name,
-        "peer-review-completed" if returncode == 0 else "peer-review-failed",
+        status_from_returncode("peer-review", returncode),
         returncode,
     )
     return reviewer.name, returncode
@@ -1141,6 +1273,8 @@ def run_peer_review(
 
 def main() -> int:
     args = parse_args()
+    _positive_timeout(args.agent_timeout_seconds, "--agent-timeout-seconds")
+    _positive_timeout(args.idle_timeout_seconds, "--idle-timeout-seconds")
     if shutil.which("codex") is None and not args.dry_run:
         raise SystemExit("codex CLI was not found on PATH")
 
@@ -1221,26 +1355,35 @@ def main() -> int:
     if args.mode == "mvp":
         return run_mvp_pipeline(args, teammates, run_dir)
 
-    with ThreadPoolExecutor(max_workers=len(teammates)) as executor:
+    reporting = [teammate for teammate in teammates if is_reporting_teammate(teammate)]
+    execution_teammates = [teammate for teammate in teammates if not is_reporting_teammate(teammate)]
+    if not execution_teammates:
+        execution_teammates = teammates
+
+    teammate_results: dict[str, int] = {}
+    with ThreadPoolExecutor(max_workers=len(execution_teammates)) as executor:
         futures = [
             executor.submit(run_teammate, args, run_dir, teammate, edit_allowed)
-            for teammate in teammates
+            for teammate in execution_teammates
         ]
         for future in as_completed(futures):
             name, returncode = future.result()
+            teammate_results[name] = returncode
             print(f"Teammate {name} finished with return code {returncode}")
 
     append_messages(run_dir, "outbox")
-    reporting = [teammate for teammate in teammates if is_reporting_teammate(teammate)]
     pause_for_questions(args, run_dir, "after teammate round")
     run_project_manager_reports(args, run_dir, reporting, "after teammate round", args.mode, edit_allowed)
 
-    if not args.skip_peer_review:
+    review_teammates = [
+        teammate for teammate in execution_teammates if teammate_results.get(teammate.name) == 0
+    ]
+    if not args.skip_peer_review and len(review_teammates) > 1:
         print("Starting teammate peer-review round.")
-        with ThreadPoolExecutor(max_workers=len(teammates)) as executor:
+        with ThreadPoolExecutor(max_workers=len(review_teammates)) as executor:
             futures = [
-                executor.submit(run_peer_review, args, run_dir, teammate, teammates, edit_allowed)
-                for teammate in teammates
+                executor.submit(run_peer_review, args, run_dir, teammate, review_teammates, edit_allowed)
+                for teammate in review_teammates
             ]
             for future in as_completed(futures):
                 name, returncode = future.result()
@@ -1248,6 +1391,8 @@ def main() -> int:
         append_messages(run_dir, "reviews")
         pause_for_questions(args, run_dir, "after peer review")
         run_project_manager_reports(args, run_dir, reporting, "after peer review", args.mode, edit_allowed)
+    elif not args.skip_peer_review:
+        print("Skipping peer review; fewer than two teammates completed the worker round successfully.")
 
     summary = run_dir / "summary.md"
     summary_log = run_dir / "logs" / "lead-summary.jsonl"
