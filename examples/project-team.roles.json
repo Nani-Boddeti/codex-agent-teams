@@ -1,0 +1,34 @@
+{
+  "teammates": [
+    {
+      "name": "product-owner",
+      "role": "Product owner",
+      "objective": "Define users, workflows, acceptance criteria, and release scope for: {task}",
+      "deliverable": "Product requirements and acceptance checklist."
+    },
+    {
+      "name": "dev-lead",
+      "role": "Development lead",
+      "objective": "Define architecture, ownership boundaries, implementation order, and integration risks for: {task}",
+      "deliverable": "Technical plan and work breakdown."
+    },
+    {
+      "name": "mobile-dev",
+      "role": "Flutter developer",
+      "objective": "Own mobile app implementation details for: {task}",
+      "deliverable": "Mobile implementation notes, changed files, and validation."
+    },
+    {
+      "name": "api-dev",
+      "role": "API developer",
+      "objective": "Own backend APIs, data contracts, and integration boundaries for: {task}",
+      "deliverable": "API implementation notes, changed files, and validation."
+    },
+    {
+      "name": "qa",
+      "role": "Tester subagent",
+      "objective": "Own test planning, regression checks, and edge-case validation for: {task}",
+      "deliverable": "Test report with commands, failures, and remaining risks."
+    }
+  ]
+}

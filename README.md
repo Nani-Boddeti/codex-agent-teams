@@ -1,0 +1,181 @@
+# Agent Teams for Codex
+
+Autonomous multi-agent delivery for Codex. Give it a task — a product idea, a feature, a bug fix — and a coordinated team of Codex agents plans, implements, validates, and delivers a working result with no user interaction in between.
+
+## Install
+
+**Option 1 — Codex marketplace (recommended):**
+
+```bash
+codex plugin marketplace add Nani-Boddeti/codex-agent-teams
+```
+
+Then open Codex → `/plugins` → find **Agent Teams** → Install. Restart Codex when prompted.
+
+To uninstall, go to Codex → `/plugins` → **Agent Teams** → Uninstall, then run:
+
+```bash
+codex plugin marketplace remove agent-teams-marketplace
+```
+
+**Option 2 — Headless one-liner (no UI required):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Nani-Boddeti/codex-agent-teams/main/scripts/install_local.py | python3 - --force
+```
+
+Restart Codex after the command finishes. The slash command will be available as `/agent-teams:team`.
+
+## Usage
+
+```text
+/agent-teams:team build a CLI task manager with add, list, and done commands
+```
+
+If you don't specify `--mode`, the plugin asks you to choose:
+
+```
+Which mode would you like to run?
+
+1. mvp (default) — autonomous plan → implement → validate → fix → deliver
+2. review        — read-only team review, no file edits
+3. research      — read-only discovery and analysis
+4. implement-plan — implement an existing plan (edits enabled)
+
+Press Enter or type 1 to use the default (mvp).
+```
+
+### MVP pipeline (default)
+
+```
+Phase 1 — Planning    product-owner + dev-lead define requirements and architecture
+Phase 2 — Implement   developers build in parallel, reading the planning outputs
+Phase 3 — Validate    tester checks against requirements → STATUS: PASS or STATUS: FAIL
+           Fix loop   if FAIL, developers fix only what failed (up to --max-fix-rounds)
+Phase 4 — Synthesis   lead writes the final MVP handoff document (summary.md)
+```
+
+### More examples
+
+```text
+/agent-teams:team build a REST API for user authentication
+/agent-teams:team add dark mode to this app
+/agent-teams:team --mode review review this codebase for auth risks
+/agent-teams:team --mode mvp --max-fix-rounds 3 build a real-time chat feature
+```
+
+### Run directly
+
+```bash
+python3 ~/.codex/plugins/agent-teams/scripts/agent_team.py --task "build a CLI task manager" --cwd "$PWD"
+```
+
+### All options
+
+```bash
+--mode mvp                 # default — autonomous plan→implement→validate→deliver
+--mode review              # read-only team review, no edits
+--mode research            # read-only discovery and analysis
+--mode implement-plan      # implement an existing plan (requires --allow-edit)
+--max-fix-rounds 2         # max fix iterations before synthesis (default 2)
+--team-size 7              # number of teammates, or 'auto'
+--roles team.roles.json    # custom role profile (JSON file or inline JSON)
+--model gpt-5.5            # Codex model override
+--no-edit                  # disable file edits even in mvp/implement-plan mode
+--skip-peer-review         # skip peer review round (non-mvp modes)
+--dry-run                  # create workspace and prompts without running Codex
+--state-dir .agent-teams/runs
+```
+
+## Default Team
+
+Five teammates by default:
+
+```
+product-owner    Requirements, users, scope, acceptance criteria       → planning phase
+dev-lead         Architecture, work breakdown, integration risks        → planning phase
+developer-1      First implementation area or primary code path         → implement phase
+developer-2      Second implementation area or adjacent integration     → implement phase
+tester           Validation, tests, acceptance checks, release risks    → validate phase
+```
+
+Roles are assigned to phases automatically based on their name. Add up to 10 teammates with `--team-size`; larger teams add UX designer, security reviewer, DevOps engineer, second tester, and technical writer.
+
+## Custom Roles
+
+Pass `--roles` as a JSON file path or inline JSON:
+
+```json
+{
+  "teammates": [
+    {
+      "name": "product-owner",
+      "role": "Product owner",
+      "objective": "Define users, workflows, and acceptance criteria for: {task}",
+      "deliverable": "Product requirements and acceptance checklist."
+    },
+    {
+      "name": "mobile-dev",
+      "role": "Flutter developer",
+      "objective": "Own mobile app implementation for: {task}",
+      "deliverable": "Implementation notes, changed files, and validation."
+    },
+    {
+      "name": "api-dev",
+      "role": "API developer",
+      "objective": "Own backend APIs and data contracts for: {task}",
+      "deliverable": "API implementation notes, changed files, and validation."
+    },
+    {
+      "name": "qa",
+      "role": "Tester subagent",
+      "objective": "Own test planning and validation for: {task}",
+      "deliverable": "Test report with commands, failures, and remaining risks."
+    }
+  ]
+}
+```
+
+```bash
+python3 ~/.codex/plugins/agent-teams/scripts/agent_team.py \
+  --task "build the project dashboard MVP" \
+  --cwd "$PWD" \
+  --roles team.roles.json
+```
+
+## Run Output
+
+Each run writes a workspace under `.agent-teams/runs/<timestamp>-<task-slug>/`:
+
+```
+task.md                          Original task and run settings
+roster.json                      Teammate status and return codes
+tasks.json                       Assignment details
+messages.md                      Indexed teammate messages
+phases/planning/<name>.md        Planning phase outputs
+phases/implement/<name>.md       Implementation outputs
+phases/validate-0/<name>.md      Validation report (round 0)
+phases/fix-1/<name>.md           Fix round outputs (if needed)
+phases/validate-1/<name>.md      Re-validation after fix
+logs/<phase>-<name>.jsonl        Raw Codex JSONL events
+summary.md                       Final MVP delivery document
+```
+
+## Verify
+
+```bash
+python3 scripts/validate.py
+python3 plugins/agent-teams/scripts/agent_team.py --task "dry run" --cwd "$PWD" --dry-run
+```
+
+## Project Layout
+
+```
+.agents/plugins/marketplace.json
+.agents/plugins/plugins/agent-teams/.codex-plugin/plugin.json
+.agents/plugins/plugins/agent-teams/skills/team/SKILL.md
+.agents/plugins/plugins/agent-teams/scripts/agent_team.py
+.agents/plugins/plugins/agent-teams/assets/icon.svg
+scripts/install_local.py
+scripts/validate.py
+```
