@@ -54,14 +54,14 @@ def repo_root() -> Path | None:
 
 
 def find_plugin_source(root: Path) -> Path | None:
-    # Canonical location: .agents/plugins/plugins/<name>/
-    agents_nested = root / ".agents" / "plugins" / "plugins" / PLUGIN_NAME
-    if agents_nested.exists():
-        return agents_nested
-    # Legacy repo-root location
+    # Canonical marketplace package location: <repo>/plugins/<name>/
     nested = root / "plugins" / PLUGIN_NAME
     if nested.exists():
         return nested
+    # Legacy development layout used by early builds.
+    agents_nested = root / ".agents" / "plugins" / "plugins" / PLUGIN_NAME
+    if agents_nested.exists():
+        return agents_nested
     if (root / ".codex-plugin" / "plugin.json").exists():
         return root
     return None
@@ -190,7 +190,7 @@ def upsert_codex_marketplace(codex_home: Path, marketplace_root: Path) -> Path:
 
 
 def marketplace_plugin_target(agents_home: Path) -> Path:
-    return agents_home.parent / "plugins" / PLUGIN_NAME
+    return agents_home / "plugins" / "plugins" / PLUGIN_NAME
 
 
 def enable_codex_plugin(codex_home: Path) -> Path:

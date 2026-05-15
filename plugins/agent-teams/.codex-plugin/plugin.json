@@ -1,0 +1,40 @@
+{
+  "name": "agent-teams",
+  "version": "0.2.0",
+  "description": "Coordinate multiple Codex exec sessions as a configurable project team with shared task, inbox, outbox, logs, and final synthesis files.",
+  "author": {
+    "name": "Agent Teams Contributors",
+    "url": "https://github.com/Nani-Boddeti/codex-agent-teams"
+  },
+  "homepage": "https://github.com/Nani-Boddeti/codex-agent-teams",
+  "repository": "https://github.com/Nani-Boddeti/codex-agent-teams",
+  "license": "MIT",
+  "keywords": [
+    "agent-teams",
+    "multi-agent",
+    "codex",
+    "coordination",
+    "parallel"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Agent Teams",
+    "shortDescription": "Run coordinated Codex teammate sessions from one task",
+    "longDescription": "Agent Teams launches a configurable Codex project team, coordinates teammates through shared task and inbox/outbox files, captures logs, runs peer review, and generates a lead synthesis.",
+    "developerName": "Agent Teams Contributors",
+    "category": "Coding",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/Nani-Boddeti/codex-agent-teams",
+    "privacyPolicyURL": "https://github.com/Nani-Boddeti/codex-agent-teams",
+    "termsOfServiceURL": "https://github.com/Nani-Boddeti/codex-agent-teams",
+    "defaultPrompt": [
+      "Use agent teams to split this task across Product owner, Development lead, Developer, and Tester teammates."
+    ],
+    "composerIcon": "./assets/icon.svg",
+    "logo": "./assets/icon.svg",
+    "brandColor": "#111111"
+  }
+}

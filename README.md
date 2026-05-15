@@ -24,12 +24,12 @@ codex plugin marketplace remove agent-teams-marketplace
 curl -fsSL https://raw.githubusercontent.com/Nani-Boddeti/codex-agent-teams/main/scripts/install_local.py | python3 - --force
 ```
 
-Restart Codex after the command finishes. The slash command will be available as `/agent-teams:team`.
+Restart Codex after the command finishes. In Codex, invoke the plugin from the composer with `$agent-teams` or by selecting **Agent Teams** from the plugin picker.
 
 ## Usage
 
 ```text
-/agent-teams:team build a CLI task manager with add, list, and done commands
+$agent-teams build a CLI task manager with add, list, and done commands
 ```
 
 If you don't specify `--mode`, the plugin asks you to choose:
@@ -58,16 +58,16 @@ Phase 4 — Synthesis   lead writes the final MVP handoff document (summary.md)
 ### More examples
 
 ```text
-/agent-teams:team build a REST API for user authentication
-/agent-teams:team add dark mode to this app
-/agent-teams:team --mode review review this codebase for auth risks
-/agent-teams:team --mode mvp --max-fix-rounds 3 build a real-time chat feature
+$agent-teams build a REST API for user authentication
+$agent-teams add dark mode to this app
+$agent-teams --mode review review this codebase for auth risks
+$agent-teams --mode mvp --max-fix-rounds 3 build a real-time chat feature
 ```
 
 ### Run directly
 
 ```bash
-python3 ~/.codex/plugins/agent-teams/scripts/agent_team.py --task "build a CLI task manager" --cwd "$PWD"
+python3 plugins/agent-teams/scripts/agent_team.py --task "build a CLI task manager" --cwd "$PWD"
 ```
 
 ### All options
@@ -137,7 +137,7 @@ Pass `--roles` as a JSON file path or inline JSON:
 ```
 
 ```bash
-python3 ~/.codex/plugins/agent-teams/scripts/agent_team.py \
+python3 plugins/agent-teams/scripts/agent_team.py \
   --task "build the project dashboard MVP" \
   --cwd "$PWD" \
   --roles team.roles.json
@@ -172,10 +172,10 @@ python3 plugins/agent-teams/scripts/agent_team.py --task "dry run" --cwd "$PWD" 
 
 ```
 .agents/plugins/marketplace.json
-.agents/plugins/plugins/agent-teams/.codex-plugin/plugin.json
-.agents/plugins/plugins/agent-teams/skills/team/SKILL.md
-.agents/plugins/plugins/agent-teams/scripts/agent_team.py
-.agents/plugins/plugins/agent-teams/assets/icon.svg
+plugins/agent-teams/.codex-plugin/plugin.json
+plugins/agent-teams/skills/team/SKILL.md
+plugins/agent-teams/scripts/agent_team.py
+plugins/agent-teams/assets/icon.svg
 scripts/install_local.py
 scripts/validate.py
 ```

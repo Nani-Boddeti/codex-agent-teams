@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PLUGIN_ROOT = ROOT / ".agents" / "plugins" / "plugins" / "agent-teams"
+PLUGIN_ROOT = ROOT / "plugins" / "agent-teams"
 
 
 def load_json(path: Path) -> dict:
@@ -48,11 +48,9 @@ def validate_installer_registration() -> None:
         )
 
         require(codex_home / "plugins" / "agent-teams" / "skills" / "team" / "SKILL.md")
-        require(agents_home.parent / "plugins" / "agent-teams" / "skills" / "team" / "SKILL.md")
+        require(agents_home / "plugins" / "plugins" / "agent-teams" / "skills" / "team" / "SKILL.md")
         require(agents_home / "plugins" / "marketplace.json")
         require(codex_home / "config.toml")
-        if (agents_home / "plugins" / "plugins" / "agent-teams").exists():
-            raise SystemExit("installer must not copy marketplace plugins under .agents/plugins/plugins")
 
         marketplace = load_json(agents_home / "plugins" / "marketplace.json")
         if marketplace.get("name") != "agent-teams-marketplace":
@@ -93,7 +91,7 @@ def main() -> int:
         if source.get("source") != "local":
             raise SystemExit("agent-teams marketplace source must be local")
         if source.get("path") != "./plugins/agent-teams":
-            raise SystemExit("agent-teams marketplace path must be ../../plugins/agent-teams")
+            raise SystemExit("agent-teams marketplace path must be ./plugins/agent-teams")
         policy = agent_teams_entry.get("policy", {})
         if policy.get("installation") != "INSTALLED_BY_DEFAULT":
             raise SystemExit("agent-teams policy must be INSTALLED_BY_DEFAULT")
