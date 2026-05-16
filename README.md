@@ -44,7 +44,7 @@ Which mode would you like to run?
 1. mvp (default) — autonomous planning docs → implement → peer review → validate → fix → deliver
 2. review        — read-only team review, no file edits
 3. research      — read-only discovery and analysis
-4. implement-plan — implement an existing plan (edits enabled)
+4. implement-plan — implement existing plan → peer review/fix → validate/fix → synthesize → self-review
 
 Press Enter or type 1 to use the default (mvp).
 ```
@@ -62,6 +62,18 @@ Phase 4 — Validate     tester checks against requirements/docs → STATUS: PAS
             Fix loop   if FAIL, developers fix only what failed, then peer review repeats before validation
 Phase 5 — Synthesis    lead writes the final MVP handoff document (summary.md)
 Phase 6 — Self-review  final reviewer records learnings and may update the skill/plugin itself
+```
+
+### Implement-plan pipeline
+
+```
+Phase 1 — Implement    developers implement the existing plan/task instructions
+Phase 2 — Peer review  reviewers check implementation before validation
+            Review fix if comments are requested, developers address them and peer review repeats
+Phase 3 — Validate     validators run tests/checks → STATUS: PASS or STATUS: FAIL
+            Fix loop   if FAIL, developers fix only what failed, then peer review repeats before validation
+Phase 4 — Synthesis    lead writes the final delivery handoff (summary.md)
+Phase 5 — Self-review  final reviewer records learnings and may update the skill/plugin itself
 ```
 
 ### More examples
@@ -85,8 +97,8 @@ python3 plugins/agent-teams/scripts/agent_team.py --task "build a CLI task manag
 --mode mvp                 # default — planning docs→implement→peer review→validate→deliver
 --mode review              # read-only team review, no edits
 --mode research            # read-only discovery and analysis
---mode implement-plan      # implement an existing plan (requires --allow-edit)
---max-fix-rounds 2         # max fix iterations before synthesis (default 2)
+--mode implement-plan      # implement an existing plan with peer review, validation, synthesis, self-review (requires --allow-edit for edits)
+--max-fix-rounds 2         # max validation fix iterations before synthesis (default 2)
 --team-size 7              # number of teammates, or 'auto'
 --roles team.roles.json    # custom role profile (JSON file or inline JSON)
 --model gpt-5.5            # Codex model override
@@ -185,6 +197,11 @@ phases/validate-0/<name>.md      Validation report (round 0)
 phases/fix-1/<name>.md           Fix round outputs (if needed)
 phases/peer-review-1-0/<name>.md Peer-review reports after validation fixes
 phases/validate-1/<name>.md      Re-validation after fix
+phases/implement-plan/<name>.md  Implement-plan implementation outputs
+phases/plan-peer-review-0-0/<name>.md Implement-plan peer-review reports
+phases/plan-peer-fix-0-0/<name>.md Implement-plan peer-review fixes
+phases/plan-validate-0/<name>.md Implement-plan validation report
+phases/plan-fix-1/<name>.md      Implement-plan validation fix outputs
 reports/<checkpoint>-<name>.md   Project-manager status reports and answers
 logs/<phase>-<name>.jsonl        Raw Codex JSONL events
 summary.md                       Final MVP delivery document

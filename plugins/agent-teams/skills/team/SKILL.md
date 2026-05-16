@@ -37,7 +37,7 @@ Check if the user already included `--mode` in `$ARGUMENTS`.
   > 1. **mvp** *(default)* — autonomous planning docs → implement → peer review → validate → fix → deliver
   > 2. **review** — read-only team review, no file edits
   > 3. **research** — read-only discovery and analysis
-  > 4. **implement-plan** — implement an existing plan (edits enabled)
+  > 4. **implement-plan** — implement existing plan → peer review/fix → validate/fix → synthesize → self-review
   >
   > Press Enter or type `1` to use the default (mvp).
 
@@ -92,7 +92,7 @@ When the script finishes:
 | `mvp` | ✅ yes | Planning docs → implement → peer-review loop → validate → fix loop → deliver. Default. |
 | `review` | ❌ no | Parallel team review with peer round and lead synthesis |
 | `research` | ❌ no | Lightweight discovery, defaults to 4 teammates including project-manager |
-| `implement-plan` | ✅ yes | Implement an existing plan (requires `--allow-edit`) |
+| `implement-plan` | ✅ yes | Implement an existing plan with peer-review/fix loop, validate/fix loop, synthesis, and self-review (requires `--allow-edit` for edits). |
 
 ## MVP Pipeline
 
@@ -107,6 +107,18 @@ When mode is `mvp`, the pipeline runs fully autonomously:
 7. **Fix loop** — if validation fails, developers fix only what failed, then peer review repeats before re-validation (up to `--max-fix-rounds`, default 2)
 8. **Synthesis** — lead writes the final MVP handoff document (`summary.md`)
 9. **Self-review and learning** — final reviewer records reusable process learnings in `self-review.md`; when running inside the Agent Teams repo with edits enabled, it may make small updates to the skill/plugin based on those learnings
+
+## Implement-Plan Pipeline
+
+When mode is `implement-plan`, the pipeline runs:
+
+1. **Implementation** — developers implement the existing plan/task instructions
+2. **Peer review** — reviewers check the implementation before validation
+3. **Review fix loop** — if peer review gives comments (`STATUS: CHANGES_REQUESTED`), developers address the comments and peer review runs again until all reviewers return `STATUS: APPROVED`
+4. **Validation** — validators run tests and acceptance checks → `STATUS: PASS` or `STATUS: FAIL`
+5. **Validation fix loop** — if validation fails, developers fix only what failed, then peer review repeats before re-validation (up to `--max-fix-rounds`, default 2)
+6. **Synthesis** — lead writes the final delivery handoff (`summary.md`)
+7. **Self-review and learning** — final reviewer writes `self-review.md` and may update the skill/plugin when running inside the Agent Teams repo with edits enabled
 
 ## Default Team
 
@@ -134,7 +146,7 @@ Use `--team-size` (up to 11) to expand. Larger teams add: UX designer, security 
 --mode review              # read-only team review
 --mode research            # read-only discovery
 --mode implement-plan --allow-edit
---max-fix-rounds 3         # mvp: max fix iterations (default 2)
+--max-fix-rounds 3         # mvp/implement-plan: max validation fix iterations (default 2)
 --team-size 7
 --roles team.roles.json
 --model gpt-5.5

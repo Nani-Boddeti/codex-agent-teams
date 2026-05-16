@@ -835,6 +835,18 @@ def mvp_delivery_dirs(run_dir: Path) -> list[Path]:
     )
 
 
+def implement_plan_delivery_dirs(run_dir: Path) -> list[Path]:
+    phases_dir = run_dir / "phases"
+    if not phases_dir.exists():
+        return []
+    delivery_pattern = re.compile(r"^(implement-plan|plan-fix-\d+|plan-peer-fix-\d+-\d+)$")
+    return sorted(
+        p
+        for p in phases_dir.iterdir()
+        if p.is_dir() and delivery_pattern.match(p.name) and any(p.glob("*.md"))
+    )
+
+
 def _mvp_planning_prompt(run_dir: Path, teammate: Teammate, task: str) -> str:
     return f"""You are teammate `{teammate.name}` in the PLANNING phase of an MVP build.
 
@@ -1097,6 +1109,214 @@ Write a concise MVP delivery report covering:
 6. How to run or use what was built
 
 Be direct and actionable. This is the handoff document.
+"""
+
+
+def _implement_plan_prompt(
+    run_dir: Path,
+    teammate: Teammate,
+    edit_allowed: bool,
+    fix_round: int = 0,
+    validator_report: Path | None = None,
+) -> str:
+    if fix_round and validator_report and validator_report.exists():
+        context = f"""This is IMPLEMENT-PLAN FIX ROUND {fix_round}.
+
+Validator report: {validator_report}
+
+Read the validator report carefully. Fix ONLY the failed checks and keep changes scoped.
+"""
+    else:
+        context = """This is the IMPLEMENT-PLAN phase. Implement the existing user-provided plan or task instructions."""
+    edit_policy = (
+        "You may edit files. Keep changes scoped to your assignment."
+        if edit_allowed
+        else "Do not edit files. Inspect, validate, and report only because edits are disabled."
+    )
+    return f"""You are teammate `{teammate.name}` in implement-plan mode.
+
+Role: {teammate.role}
+Objective: {teammate.objective}
+Deliverable: {teammate.deliverable}
+
+{context}
+
+Read:
+- {run_dir / "task.md"}
+- {run_dir / "tasks.json"}
+- {run_dir / "inbox" / (teammate.name + ".md")}
+- {run_dir / "messages.md"}
+
+Edit policy: {edit_policy}
+Do not revert user or teammate changes.
+
+Output requirements:
+- Start with your name and role.
+- List every file you created or modified with a brief reason.
+- Include validation you performed locally, if any.
+- Include a `Message to team:` section if you made decisions others need to know.
+- End with exactly: STATUS: DONE  (or STATUS: BLOCKED: <reason> if blocked)
+"""
+
+
+def _implement_plan_peer_review_prompt(
+    run_dir: Path,
+    reviewer: Teammate,
+    delivery_dirs: list[Path],
+    fix_round: int,
+    peer_round: int,
+) -> str:
+    delivery_files = "\n".join(
+        f"- {p}" for d in delivery_dirs for p in sorted(d.glob("*.md")) if p.exists()
+    )
+    return f"""You are teammate `{reviewer.name}` performing IMPLEMENT-PLAN PEER REVIEW.
+
+Role: {reviewer.role}
+Validation fix round: {fix_round}
+Peer review round: {peer_round}
+
+Edit policy: Do not edit files during peer review. Review and report only.
+
+Read:
+- {run_dir / "task.md"}
+- {run_dir / "tasks.json"}
+- {run_dir / "messages.md"}
+- Implementation and peer-fix outputs:
+{delivery_files}
+
+Your job:
+- Review implementation against the requested plan/task.
+- Find correctness gaps, missed requirements, integration issues, contradictions, unsafe assumptions, weak tests, and maintainability risks.
+- Treat every concrete review comment as blocking until addressed.
+- Avoid subjective style comments unless they affect correctness, maintainability, security, usability, or delivery.
+
+Output requirements:
+- Start with your name and role.
+- If you have review comments, list each one with an ID, severity, evidence, affected path, and required fix.
+- If you have no review comments, say that explicitly.
+- Include a `Message to team:` section only for decisions or required actions the whole team needs.
+- End with exactly one of:
+  STATUS: APPROVED
+  STATUS: CHANGES_REQUESTED
+"""
+
+
+def _implement_plan_peer_fix_prompt(
+    run_dir: Path,
+    teammate: Teammate,
+    edit_allowed: bool,
+    delivery_dirs: list[Path],
+    review_dir: Path,
+    fix_round: int,
+    peer_round: int,
+) -> str:
+    delivery_files = "\n".join(
+        f"- {p}" for d in delivery_dirs for p in sorted(d.glob("*.md")) if p.exists()
+    )
+    review_files = "\n".join(f"- {p}" for p in sorted(review_dir.glob("*.md")) if p.exists())
+    edit_policy = (
+        "You may edit files. Keep changes scoped to peer-review comments."
+        if edit_allowed
+        else "Do not edit files. Report how the comments should be addressed because edits are disabled."
+    )
+    return f"""You are teammate `{teammate.name}` addressing implement-plan peer-review comments.
+
+Role: {teammate.role}
+Validation fix round: {fix_round}
+Peer review round with comments: {peer_round}
+
+Read:
+- {run_dir / "task.md"}
+- {run_dir / "tasks.json"}
+- {run_dir / "messages.md"}
+- Implementation and previous peer-fix outputs:
+{delivery_files}
+- Peer-review comments to address:
+{review_files}
+
+Your job:
+- Address all concrete peer-review comments that apply to your implementation area.
+- Keep changes scoped to review comments. Do not add unrelated features.
+- If a comment cannot be addressed, document the blocker and exact remaining risk.
+
+Edit policy: {edit_policy} Do not revert user or teammate changes.
+
+Output requirements:
+- Start with your name and role.
+- List every review comment you addressed or could not address.
+- List every file you created or modified with a brief reason.
+- Include a `Message to team:` section if others need to know a decision or blocker.
+- End with exactly: STATUS: DONE  (or STATUS: BLOCKED: <reason> if blocked)
+"""
+
+
+def _implement_plan_validation_prompt(
+    run_dir: Path,
+    teammate: Teammate,
+    delivery_dirs: list[Path],
+    fix_round: int = 0,
+) -> str:
+    delivery_files = "\n".join(
+        f"- {p}" for d in delivery_dirs for p in sorted(d.glob("*.md")) if p.exists()
+    )
+    round_label = f"after fix round {fix_round}" if fix_round else "initial validation"
+    return f"""You are teammate `{teammate.name}` performing IMPLEMENT-PLAN VALIDATION ({round_label}).
+
+Role: {teammate.role}
+
+Read:
+- {run_dir / "task.md"}
+- {run_dir / "tasks.json"}
+- {run_dir / "messages.md"}
+- Implementation outputs:
+{delivery_files}
+
+Your job:
+- Run tests and verify the implementation against the requested plan/task.
+- Check that acceptance criteria and expected behavior are met.
+- Report failures with specific file paths, function names, and error messages.
+
+Group failures by severity:
+- CRITICAL: blocks delivery
+- MAJOR: significant gap but has a workaround
+- MINOR: cosmetic or non-blocking
+
+Output requirements:
+- Start with your name and role.
+- List every check you ran with PASS/FAIL status.
+- List all failures grouped by severity with specific evidence.
+- End with exactly one of:
+  STATUS: PASS
+  STATUS: FAIL
+"""
+
+
+def _implement_plan_synthesis_prompt(run_dir: Path, passed: bool, fix_rounds: int) -> str:
+    outcome = "PASSED validation" if passed else f"reached max fix rounds ({fix_rounds}) without full pass"
+    return f"""You are the lead for a Codex agent team. Synthesize the implement-plan delivery.
+
+Workspace: {run_dir}
+Validation outcome: {outcome}
+Fix rounds completed: {fix_rounds}
+
+Read every file in the workspace:
+- task.md
+- tasks.json
+- roster.json
+- phases/implement-plan/*.md
+- phases/plan-peer-review-*/*.md
+- phases/plan-peer-fix-*/*.md
+- phases/plan-validate-*/*.md
+- phases/plan-fix-*/*.md
+- reports/*.md
+- messages.md
+
+Write a concise delivery report covering:
+1. What was implemented and which files changed
+2. Peer-review outcome and review comments addressed
+3. Validation results and any remaining failures
+4. Known gaps or recommended follow-up work
+5. How to run or use the result
 """
 
 
@@ -1459,6 +1679,284 @@ def run_self_review_phase(
         print("Self-review phase failed; inspect prior delivery outputs manually.", file=sys.stderr)
     else:
         print(f"Self-review complete. Report: {report}")
+
+
+def implement_plan_reviewers(
+    planning: list[Teammate],
+    impl_team: list[Teammate],
+    validators: list[Teammate],
+) -> list[Teammate]:
+    reviewers = unique_teammates(validators + planning + impl_team)
+    return reviewers or impl_team
+
+
+def run_implement_plan_peer_review_loop(
+    args: argparse.Namespace,
+    run_dir: Path,
+    planning: list[Teammate],
+    impl_team: list[Teammate],
+    validators: list[Teammate],
+    reporting: list[Teammate],
+    fix_round: int,
+    edit_allowed: bool,
+) -> None:
+    if args.skip_peer_review:
+        print("Skipping implement-plan peer review because --skip-peer-review was provided.")
+        return
+
+    reviewers = implement_plan_reviewers(planning, impl_team, validators)
+    if not reviewers:
+        print("Skipping implement-plan peer review; no reviewers are available.")
+        return
+
+    peer_round = 0
+    while True:
+        delivery_dirs = implement_plan_delivery_dirs(run_dir)
+        review_label = f"plan-peer-review-{fix_round}-{peer_round}"
+        print(f"\n=== Implement-Plan Peer Review (fix round {fix_round}, review round {peer_round}) ===")
+        update_phase(run_dir, review_label)
+        review_dir = run_dir / "phases" / review_label
+        review_dir.mkdir(parents=True, exist_ok=True)
+
+        if args.dry_run:
+            for reviewer in reviewers:
+                (review_dir / f"{reviewer.name}.md").write_text(
+                    "Dry-run implement-plan peer review.\nSTATUS: APPROVED\n",
+                    encoding="utf-8",
+                )
+                update_status(run_dir, reviewer.name, f"{review_label}-dry-run", 0)
+        else:
+            with ThreadPoolExecutor(max_workers=max(1, len(reviewers))) as executor:
+                futures = {
+                    executor.submit(
+                        run_phase_agent,
+                        args,
+                        run_dir,
+                        reviewer,
+                        review_label,
+                        _implement_plan_peer_review_prompt(
+                            run_dir,
+                            reviewer,
+                            delivery_dirs,
+                            fix_round,
+                            peer_round,
+                        ),
+                        review_dir / f"{reviewer.name}.md",
+                        run_dir / "logs" / f"{review_label}-{reviewer.name}.jsonl",
+                    ): reviewer
+                    for reviewer in reviewers
+                }
+                for future in as_completed(futures):
+                    rc = future.result()
+                    print(f"  {futures[future].name} implement-plan peer review done (rc={rc})")
+
+        append_messages(run_dir, str(review_dir.relative_to(run_dir)))
+        pause_for_questions(args, run_dir, f"after {review_label}")
+        run_project_manager_reports(args, run_dir, reporting, f"after {review_label}", args.mode, edit_allowed)
+
+        approved = all(peer_review_approved(review_dir / f"{reviewer.name}.md") for reviewer in reviewers)
+        if approved:
+            print("Implement-plan peer review approved. Proceeding to validation.")
+            return
+
+        if not impl_team:
+            print(
+                "Implement-plan peer review requested changes, but no implementation teammates are available. "
+                "Proceeding to validation with the review risk recorded.",
+                file=sys.stderr,
+            )
+            return
+
+        fix_label = f"plan-peer-fix-{fix_round}-{peer_round}"
+        print("Implement-plan peer review requested changes. Addressing comments before re-review.")
+        update_phase(run_dir, fix_label)
+        fix_dir = run_dir / "phases" / fix_label
+        fix_dir.mkdir(parents=True, exist_ok=True)
+
+        if args.dry_run:
+            for teammate in impl_team:
+                (fix_dir / f"{teammate.name}.md").write_text(
+                    "Dry-run implement-plan peer-review fix.\nSTATUS: DONE\n",
+                    encoding="utf-8",
+                )
+                update_status(run_dir, teammate.name, f"{fix_label}-dry-run", 0)
+        else:
+            with ThreadPoolExecutor(max_workers=max(1, len(impl_team))) as executor:
+                futures = {
+                    executor.submit(
+                        run_phase_agent,
+                        args,
+                        run_dir,
+                        teammate,
+                        fix_label,
+                        _implement_plan_peer_fix_prompt(
+                            run_dir,
+                            teammate,
+                            edit_allowed,
+                            implement_plan_delivery_dirs(run_dir),
+                            review_dir,
+                            fix_round,
+                            peer_round,
+                        ),
+                        fix_dir / f"{teammate.name}.md",
+                        run_dir / "logs" / f"{fix_label}-{teammate.name}.jsonl",
+                    ): teammate
+                    for teammate in impl_team
+                }
+                for future in as_completed(futures):
+                    rc = future.result()
+                    print(f"  {futures[future].name} implement-plan peer-review fix done (rc={rc})")
+
+        append_messages(run_dir, str(fix_dir.relative_to(run_dir)))
+        pause_for_questions(args, run_dir, f"after {fix_label}")
+        run_project_manager_reports(args, run_dir, reporting, f"after {fix_label}", args.mode, edit_allowed)
+        peer_round += 1
+
+
+def run_implement_plan_pipeline(
+    args: argparse.Namespace,
+    teammates: list[Teammate],
+    run_dir: Path,
+) -> int:
+    max_fix_rounds: int = args.max_fix_rounds
+    edit_allowed = args.allow_edit and not args.no_edit
+    reporting, planning, impl_team, validators = categorize_for_mvp(teammates)
+    if not impl_team:
+        impl_team = [
+            teammate
+            for teammate in teammates
+            if teammate.name not in {t.name for t in reporting + validators}
+        ]
+
+    print(
+        f"\nImplement-plan pipeline: {len(reporting)} reporting | "
+        f"{len(planning)} reviewing/planning | "
+        f"{len(impl_team)} implementing | "
+        f"{len(validators)} validating | "
+        f"up to {max_fix_rounds} validation fix rounds"
+    )
+
+    fix_round = 0
+    validator_report: Path | None = None
+    passed = False
+
+    while True:
+        phase_key = f"plan-fix-{fix_round}" if fix_round else "implement-plan"
+        print(f"\n=== {'Implement-Plan Fix Round ' + str(fix_round) if fix_round else 'Implement-Plan Implementation'} ===")
+        update_phase(run_dir, phase_key)
+        impl_dir = run_dir / "phases" / phase_key
+        impl_dir.mkdir(parents=True, exist_ok=True)
+
+        if args.dry_run:
+            for teammate in impl_team:
+                (impl_dir / f"{teammate.name}.md").write_text(
+                    f"Dry-run implement-plan output for {teammate.name}.\nSTATUS: DONE\n",
+                    encoding="utf-8",
+                )
+                update_status(run_dir, teammate.name, f"{phase_key}-dry-run", 0)
+        else:
+            with ThreadPoolExecutor(max_workers=max(1, len(impl_team))) as executor:
+                futures = {
+                    executor.submit(
+                        run_phase_agent,
+                        args,
+                        run_dir,
+                        teammate,
+                        phase_key,
+                        _implement_plan_prompt(run_dir, teammate, edit_allowed, fix_round, validator_report),
+                        impl_dir / f"{teammate.name}.md",
+                        run_dir / "logs" / f"{phase_key}-{teammate.name}.jsonl",
+                    ): teammate
+                    for teammate in impl_team
+                }
+                for future in as_completed(futures):
+                    rc = future.result()
+                    print(f"  {futures[future].name} implement-plan work done (rc={rc})")
+
+        append_messages(run_dir, str(impl_dir.relative_to(run_dir)))
+        pause_for_questions(args, run_dir, f"after {phase_key}")
+        run_project_manager_reports(args, run_dir, reporting, f"after {phase_key}", args.mode, edit_allowed)
+
+        run_implement_plan_peer_review_loop(
+            args,
+            run_dir,
+            planning,
+            impl_team,
+            validators,
+            reporting,
+            fix_round,
+            edit_allowed,
+        )
+
+        val_label = f"plan-validate-{fix_round}"
+        print(f"\n=== Implement-Plan Validation (round {fix_round}) ===")
+        update_phase(run_dir, val_label)
+        val_dir = run_dir / "phases" / val_label
+        val_dir.mkdir(parents=True, exist_ok=True)
+
+        if args.dry_run:
+            for validator in validators:
+                (val_dir / f"{validator.name}.md").write_text(
+                    "Dry-run implement-plan validation.\nSTATUS: PASS\n",
+                    encoding="utf-8",
+                )
+                update_status(run_dir, validator.name, f"{val_label}-dry-run", 0)
+        else:
+            for validator in validators:
+                rc = run_phase_agent(
+                    args,
+                    run_dir,
+                    validator,
+                    val_label,
+                    _implement_plan_validation_prompt(
+                        run_dir,
+                        validator,
+                        implement_plan_delivery_dirs(run_dir),
+                        fix_round,
+                    ),
+                    val_dir / f"{validator.name}.md",
+                    run_dir / "logs" / f"{val_label}-{validator.name}.jsonl",
+                )
+                validator_report = val_dir / f"{validator.name}.md"
+                print(f"  {validator.name} implement-plan validation done (rc={rc})")
+
+        append_messages(run_dir, str(val_dir.relative_to(run_dir)))
+        pause_for_questions(args, run_dir, f"after {val_label}")
+        run_project_manager_reports(args, run_dir, reporting, f"after {val_label}", args.mode, edit_allowed)
+
+        passed = all(tester_passed(val_dir / f"{validator.name}.md") for validator in validators)
+        if passed:
+            print("Implement-plan validation passed. Proceeding to synthesis.")
+            break
+
+        fix_round += 1
+        if fix_round > max_fix_rounds:
+            print(
+                f"Max implement-plan fix rounds ({max_fix_rounds}) reached. Proceeding to synthesis.",
+                file=sys.stderr,
+            )
+            break
+        print(f"Implement-plan validation failed. Starting fix round {fix_round}.")
+
+    print("\n=== Implement-Plan Synthesis ===")
+    update_phase(run_dir, "synthesis")
+    summary = run_dir / "summary.md"
+    summary_log = run_dir / "logs" / "lead-summary.jsonl"
+
+    if args.dry_run:
+        summary.write_text(
+            f"# Dry-run Implement-Plan Summary\n\nWorkspace: {run_dir}\nPassed: {passed}\nFix rounds: {fix_round}\n",
+            encoding="utf-8",
+        )
+    else:
+        rc = run_codex(args, _implement_plan_synthesis_prompt(run_dir, passed, fix_round), summary, summary_log)
+        if rc != 0:
+            print("Implement-plan synthesis failed; inspect phase outputs manually.", file=sys.stderr)
+            return rc
+
+    run_self_review_phase(args, run_dir, args.mode, edit_allowed)
+    print(f"\nImplement-plan delivery complete. Summary: {summary}")
+    return 0
 
 
 def run_mvp_pipeline(
@@ -1980,6 +2478,8 @@ def main() -> int:
 
     if args.mode == "mvp":
         return run_mvp_pipeline(args, teammates, run_dir)
+    if args.mode == "implement-plan":
+        return run_implement_plan_pipeline(args, teammates, run_dir)
 
     reporting = [teammate for teammate in teammates if is_reporting_teammate(teammate)]
     execution_teammates = [teammate for teammate in teammates if not is_reporting_teammate(teammate)]
