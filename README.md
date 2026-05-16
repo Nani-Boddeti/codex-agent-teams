@@ -37,7 +37,7 @@ If you don't specify `--mode`, the plugin asks you to choose:
 ```
 Which mode would you like to run?
 
-1. mvp (default) — autonomous plan → implement → validate → fix → deliver
+1. mvp (default) — autonomous planning docs → implement → peer review → validate → fix → deliver
 2. review        — read-only team review, no file edits
 3. research      — read-only discovery and analysis
 4. implement-plan — implement an existing plan (edits enabled)
@@ -48,12 +48,15 @@ Press Enter or type 1 to use the default (mvp).
 ### MVP pipeline (default)
 
 ```
-Phase 1 — Planning    product-owner + dev-lead define requirements and architecture
-           Reporting  project-manager answers questions in project-status.md at checkpoints
-Phase 2 — Implement   developers build in parallel, reading the planning outputs
-Phase 3 — Validate    tester checks against requirements → STATUS: PASS or STATUS: FAIL
-           Fix loop   if FAIL, developers fix only what failed (up to --max-fix-rounds)
-Phase 4 — Synthesis   lead writes the final MVP handoff document (summary.md)
+Phase 1 — Planning     product-owner + dev-lead define requirements and architecture
+            Docs       lead creates requirements-plan.md, hld.md, lld.md, implementation-plan.md
+            Reporting  project-manager answers questions in project-status.md at checkpoints
+Phase 2 — Implement    developers build in parallel, reading the planning docs
+Phase 3 — Peer review  reviewers check implementation before validation
+            Review fix if comments are requested, developers address them and peer review repeats
+Phase 4 — Validate     tester checks against requirements/docs → STATUS: PASS or STATUS: FAIL
+            Fix loop   if FAIL, developers fix only what failed, then peer review repeats before validation
+Phase 5 — Synthesis    lead writes the final MVP handoff document (summary.md)
 ```
 
 ### More examples
@@ -74,7 +77,7 @@ python3 plugins/agent-teams/scripts/agent_team.py --task "build a CLI task manag
 ### All options
 
 ```bash
---mode mvp                 # default — autonomous plan→implement→validate→deliver
+--mode mvp                 # default — planning docs→implement→peer review→validate→deliver
 --mode review              # read-only team review, no edits
 --mode research            # read-only discovery and analysis
 --mode implement-plan      # implement an existing plan (requires --allow-edit)
@@ -85,7 +88,7 @@ python3 plugins/agent-teams/scripts/agent_team.py --task "build a CLI task manag
 --agent-timeout-seconds 1800 # stop any one agent after this wall-clock time
 --idle-timeout-seconds 600   # stop any one agent after no output for this long
 --no-edit                  # disable file edits even in mvp/implement-plan mode
---skip-peer-review         # skip peer review round (non-mvp modes)
+--skip-peer-review         # skip peer review rounds, including mvp pre-validation review
 --pause-for-questions      # pause at PM checkpoints so you can add questions
 --dry-run                  # create workspace and prompts without running Codex
 --state-dir .agent-teams/runs
@@ -96,8 +99,8 @@ python3 plugins/agent-teams/scripts/agent_team.py --task "build a CLI task manag
 Six teammates by default:
 
 ```
-product-owner    Requirements, users, scope, acceptance criteria       → planning phase
-dev-lead         Architecture, work breakdown, integration risks        → planning phase
+product-owner    Requirements, users, scope, acceptance criteria       → planning docs
+dev-lead         Architecture, work breakdown, integration risks        → planning docs
 project-manager  Progress reports, blockers, stakeholder questions     → reporting checkpoints
 developer-1      First implementation area or primary code path         → implement phase
 developer-2      Second implementation area or adjacent integration     → implement phase
@@ -166,9 +169,16 @@ messages.md                      Indexed teammate messages
 questions.md                     Stakeholder questions for project-manager checkpoints
 project-status.md                Latest project-manager status and answers
 phases/planning/<name>.md        Planning phase outputs
+phases/planning/requirements-plan.md Canonical Requirement Plan
+phases/planning/hld.md           Canonical High-Level Design
+phases/planning/lld.md           Canonical Low-Level Design
+phases/planning/implementation-plan.md Canonical Implementation Plan
 phases/implement/<name>.md       Implementation outputs
+phases/peer-review-0-0/<name>.md Peer-review reports before validation
+phases/peer-fix-0-0/<name>.md    Fixes for peer-review comments
 phases/validate-0/<name>.md      Validation report (round 0)
 phases/fix-1/<name>.md           Fix round outputs (if needed)
+phases/peer-review-1-0/<name>.md Peer-review reports after validation fixes
 phases/validate-1/<name>.md      Re-validation after fix
 reports/<checkpoint>-<name>.md   Project-manager status reports and answers
 logs/<phase>-<name>.jsonl        Raw Codex JSONL events

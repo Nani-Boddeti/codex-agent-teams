@@ -701,6 +701,48 @@ Write a concise final synthesis that includes:
 _REPORTING_KEYWORDS = frozenset({"project manager", "project-manager", "program manager", "reporting", "coordinator"})
 _PLANNING_KEYWORDS = frozenset({"owner", "lead", "architect", "ux", "design", "product"})
 _VALIDATION_KEYWORDS = frozenset({"test", "qa", "security", "audit"})
+MVP_PLANNING_DOCUMENTS = [
+    (
+        "requirements-plan.md",
+        "Requirement Plan",
+        [
+            "MVP scope, explicit non-goals, assumptions, and dependencies",
+            "Target users or actors and primary workflows",
+            "Functional and non-functional requirements with stable IDs",
+            "Acceptance criteria mapped to the requirements",
+        ],
+    ),
+    (
+        "hld.md",
+        "High-Level Design",
+        [
+            "System context and major components",
+            "Data/control flow and integration boundaries",
+            "Technology decisions and alternatives considered",
+            "Cross-cutting risks such as security, performance, observability, and deployment",
+        ],
+    ),
+    (
+        "lld.md",
+        "Low-Level Design",
+        [
+            "Module-level responsibilities and contracts",
+            "APIs, functions/classes, data models, schemas, and state transitions",
+            "Error handling, edge cases, validation rules, and migration notes",
+            "Test hooks and implementation details needed by developers",
+        ],
+    ),
+    (
+        "implementation-plan.md",
+        "Implementation Plan",
+        [
+            "Ordered work breakdown and ownership split",
+            "Expected files or modules to touch",
+            "Dependencies, sequencing, and integration checkpoints",
+            "Validation plan and delivery risks",
+        ],
+    ),
+]
 
 
 def is_reporting_teammate(teammate: Teammate) -> bool:
@@ -748,6 +790,51 @@ def tester_passed(report_path: Path) -> bool:
     return False
 
 
+def peer_review_approved(report_path: Path) -> bool:
+    if not report_path.exists():
+        return False
+    for line in reversed(report_path.read_text(encoding="utf-8", errors="replace").splitlines()):
+        stripped = line.strip().upper()
+        if stripped == "STATUS: APPROVED":
+            return True
+        if stripped == "STATUS: CHANGES_REQUESTED":
+            return False
+    return False
+
+
+def unique_teammates(teammates: list[Teammate]) -> list[Teammate]:
+    seen: set[str] = set()
+    unique: list[Teammate] = []
+    for teammate in teammates:
+        if teammate.name in seen:
+            continue
+        seen.add(teammate.name)
+        unique.append(teammate)
+    return unique
+
+
+def mvp_peer_reviewers(
+    planning: list[Teammate],
+    impl_team: list[Teammate],
+    validators: list[Teammate],
+) -> list[Teammate]:
+    if len(impl_team) > 1:
+        return impl_team
+    return unique_teammates(impl_team + validators + planning)
+
+
+def mvp_delivery_dirs(run_dir: Path) -> list[Path]:
+    phases_dir = run_dir / "phases"
+    if not phases_dir.exists():
+        return []
+    delivery_pattern = re.compile(r"^(implement|fix-\d+|peer-fix-\d+-\d+)$")
+    return sorted(
+        p
+        for p in phases_dir.iterdir()
+        if p.is_dir() and delivery_pattern.match(p.name) and any(p.glob("*.md"))
+    )
+
+
 def _mvp_planning_prompt(run_dir: Path, teammate: Teammate, task: str) -> str:
     return f"""You are teammate `{teammate.name}` in the PLANNING phase of an MVP build.
 
@@ -768,6 +855,28 @@ Output requirements:
 - Start your response with your name and role
 - Include a `Message to team:` section listing the top decisions developers must act on
 - End with exactly: STATUS: PLANNING COMPLETE
+"""
+
+
+def _mvp_planning_document_prompt(
+    run_dir: Path,
+    plan_dir: Path,
+    title: str,
+    required_content: list[str],
+) -> str:
+    planning_files = "\n".join(f"- {p}" for p in sorted(plan_dir.glob("*.md")) if p.exists())
+    content = "\n".join(f"- {item}" for item in required_content)
+    return f"""You are the planning lead for an MVP build. Create the canonical {title}.
+
+Read:
+- {run_dir / "task.md"}
+- Individual planning outputs:
+{planning_files}
+
+The document must include:
+{content}
+
+Write only the Markdown document. Start with `# {title}`. Be concrete enough that implementation, peer review, and validation can use this as a source of truth.
 """
 
 
@@ -817,12 +926,108 @@ Output requirements:
 """
 
 
+def _mvp_peer_review_prompt(
+    run_dir: Path,
+    reviewer: Teammate,
+    plan_dir: Path,
+    delivery_dirs: list[Path],
+    fix_round: int,
+    peer_round: int,
+) -> str:
+    planning_files = "\n".join(f"- {p}" for p in sorted(plan_dir.glob("*.md")) if p.exists())
+    delivery_files = "\n".join(
+        f"- {p}" for d in delivery_dirs for p in sorted(d.glob("*.md")) if p.exists()
+    )
+    return f"""You are teammate `{reviewer.name}` performing MVP PEER REVIEW.
+
+Role: {reviewer.role}
+Validation fix round: {fix_round}
+Peer review round: {peer_round}
+
+Edit policy: Do not edit files during peer review. Review and report only.
+
+Read:
+- {run_dir / "task.md"}
+- {run_dir / "tasks.json"}
+- {run_dir / "messages.md"}
+- Planning source-of-truth docs:
+{planning_files}
+- Implementation and peer-fix outputs:
+{delivery_files}
+
+Your job:
+- Review the implementation against the Requirement Plan, HLD, LLD, and Implementation Plan.
+- Find correctness gaps, missed requirements, integration issues, contradictions, unsafe assumptions, weak tests, and maintainability risks.
+- Treat every required review comment as blocking until addressed.
+- Do not request subjective style changes unless they affect correctness, maintainability, security, usability, or delivery.
+
+Output requirements:
+- Start with your name and role.
+- If you have review comments, list each one with an ID, severity, evidence, affected path, and required fix.
+- If you have no review comments, say that explicitly.
+- Include a `Message to team:` section only for decisions or required actions the whole team needs.
+- End with exactly one of:
+  STATUS: APPROVED
+  STATUS: CHANGES_REQUESTED
+"""
+
+
+def _mvp_peer_fix_prompt(
+    run_dir: Path,
+    teammate: Teammate,
+    plan_dir: Path,
+    delivery_dirs: list[Path],
+    review_dir: Path,
+    fix_round: int,
+    peer_round: int,
+) -> str:
+    planning_files = "\n".join(f"- {p}" for p in sorted(plan_dir.glob("*.md")) if p.exists())
+    delivery_files = "\n".join(
+        f"- {p}" for d in delivery_dirs for p in sorted(d.glob("*.md")) if p.exists()
+    )
+    review_files = "\n".join(f"- {p}" for p in sorted(review_dir.glob("*.md")) if p.exists())
+    return f"""You are teammate `{teammate.name}` addressing MVP peer-review comments.
+
+Role: {teammate.role}
+Validation fix round: {fix_round}
+Peer review round with comments: {peer_round}
+
+Read:
+- {run_dir / "task.md"}
+- {run_dir / "tasks.json"}
+- {run_dir / "messages.md"}
+- Planning source-of-truth docs:
+{planning_files}
+- Implementation and previous peer-fix outputs:
+{delivery_files}
+- Peer-review comments to address:
+{review_files}
+
+Your job:
+- Address all concrete peer-review comments that apply to your implementation area.
+- Coordinate with the existing code and do not revert user or teammate changes.
+- Keep changes scoped to review comments; do not add unrelated features.
+- If a comment cannot be addressed, document the blocker and the exact remaining risk.
+
+Edit policy: You may edit files. Keep changes scoped to your assignment.
+
+Output requirements:
+- Start with your name and role.
+- List every review comment you addressed or could not address.
+- List every file you created or modified with a brief reason.
+- Include a `Message to team:` section if others need to know a decision or blocker.
+- End with exactly: STATUS: DONE  (or STATUS: BLOCKED: <reason> if blocked)
+"""
+
+
 def _mvp_validation_prompt(
     run_dir: Path,
     teammate: Teammate,
     impl_dirs: list[Path],
     fix_round: int = 0,
 ) -> str:
+    plan_dir = run_dir / "phases" / "planning"
+    planning_files = "\n".join(f"- {p}" for p in sorted(plan_dir.glob("*.md")) if p.exists())
     impl_files = "\n".join(
         f"- {p}" for d in impl_dirs for p in sorted(d.glob("*.md")) if p.exists()
     )
@@ -835,11 +1040,13 @@ Read:
 - {run_dir / "task.md"}
 - {run_dir / "tasks.json"}
 - {run_dir / "messages.md"}
+- Planning source-of-truth docs:
+{planning_files}
 - Implementation outputs:
 {impl_files}
 
 Your job:
-- Run tests and verify the implementation against the requirements in task.md
+- Run tests and verify the implementation against task.md plus the Requirement Plan, HLD, LLD, and Implementation Plan
 - Check that all acceptance criteria are met
 - Report all failures with specific file paths, function names, and error messages
 
@@ -869,7 +1076,13 @@ Fix rounds completed: {fix_rounds}
 Read every file in the workspace:
 - task.md — original requirements
 - phases/planning/*.md — requirements and architecture decisions
+- phases/planning/requirements-plan.md — canonical Requirement Plan
+- phases/planning/hld.md — canonical High-Level Design
+- phases/planning/lld.md — canonical Low-Level Design
+- phases/planning/implementation-plan.md — canonical Implementation Plan
 - phases/implement/*.md — initial implementation outputs
+- phases/peer-review-*/*.md — peer-review reports and approvals
+- phases/peer-fix-*/*.md — fixes made for peer-review comments
 - phases/validate-*/*.md — validation reports per round
 - phases/fix-*/*.md — fix round outputs (if any)
 - reports/*.md — project-manager status reports and stakeholder Q&A
@@ -877,9 +1090,11 @@ Read every file in the workspace:
 
 Write a concise MVP delivery report covering:
 1. What was built (files created/modified, features implemented)
-2. Validation results (what passed, what failed if anything remains)
-3. Known gaps or recommended follow-up work
-4. How to run or use what was built
+2. Planning artifacts produced and any important design decisions
+3. Peer-review outcome, review comments addressed, and any remaining review risk
+4. Validation results (what passed, what failed if anything remains)
+5. Known gaps or recommended follow-up work
+6. How to run or use what was built
 
 Be direct and actionable. This is the handoff document.
 """
@@ -998,6 +1213,158 @@ def run_phase_agent(
     return returncode
 
 
+def create_mvp_planning_documents(
+    args: argparse.Namespace,
+    run_dir: Path,
+    plan_dir: Path,
+) -> int:
+    print("\nCreating canonical planning documents.")
+    for filename, title, required_content in MVP_PLANNING_DOCUMENTS:
+        output = plan_dir / filename
+        if args.dry_run:
+            output.write_text(
+                f"# {title}\n\nDry-run {title} for: {args.task}\n",
+                encoding="utf-8",
+            )
+            continue
+        rc = run_codex(
+            args,
+            _mvp_planning_document_prompt(run_dir, plan_dir, title, required_content),
+            output,
+            run_dir / "logs" / f"planning-doc-{slugify(title)}.jsonl",
+        )
+        print(f"  {title} done (rc={rc})")
+        if rc != 0:
+            print(f"Planning document generation failed for {title}.", file=sys.stderr)
+            return rc
+    return 0
+
+
+def run_mvp_peer_review_loop(
+    args: argparse.Namespace,
+    run_dir: Path,
+    planning: list[Teammate],
+    impl_team: list[Teammate],
+    validators: list[Teammate],
+    reporting: list[Teammate],
+    plan_dir: Path,
+    fix_round: int,
+    edit_allowed: bool,
+) -> None:
+    if args.skip_peer_review:
+        print("Skipping MVP peer review because --skip-peer-review was provided.")
+        return
+
+    reviewers = mvp_peer_reviewers(planning, impl_team, validators)
+    if not reviewers:
+        print("Skipping MVP peer review; no reviewers are available.")
+        return
+
+    peer_round = 0
+    while True:
+        delivery_dirs = mvp_delivery_dirs(run_dir)
+        review_label = f"peer-review-{fix_round}-{peer_round}"
+        print(f"\n=== Peer Review (fix round {fix_round}, review round {peer_round}) ===")
+        update_phase(run_dir, review_label)
+        review_dir = run_dir / "phases" / review_label
+        review_dir.mkdir(parents=True, exist_ok=True)
+
+        if args.dry_run:
+            for reviewer in reviewers:
+                (review_dir / f"{reviewer.name}.md").write_text(
+                    "Dry-run peer review.\nSTATUS: APPROVED\n",
+                    encoding="utf-8",
+                )
+                update_status(run_dir, reviewer.name, f"{review_label}-dry-run", 0)
+        else:
+            with ThreadPoolExecutor(max_workers=max(1, len(reviewers))) as executor:
+                futures = {
+                    executor.submit(
+                        run_phase_agent,
+                        args,
+                        run_dir,
+                        reviewer,
+                        review_label,
+                        _mvp_peer_review_prompt(
+                            run_dir,
+                            reviewer,
+                            plan_dir,
+                            delivery_dirs,
+                            fix_round,
+                            peer_round,
+                        ),
+                        review_dir / f"{reviewer.name}.md",
+                        run_dir / "logs" / f"{review_label}-{reviewer.name}.jsonl",
+                    ): reviewer
+                    for reviewer in reviewers
+                }
+                for future in as_completed(futures):
+                    rc = future.result()
+                    print(f"  {futures[future].name} peer review done (rc={rc})")
+
+        append_messages(run_dir, str(review_dir.relative_to(run_dir)))
+        pause_for_questions(args, run_dir, f"after {review_label}")
+        run_project_manager_reports(args, run_dir, reporting, f"after {review_label}", args.mode, edit_allowed)
+
+        approved = all(peer_review_approved(review_dir / f"{reviewer.name}.md") for reviewer in reviewers)
+        if approved:
+            print("Peer review approved with no required comments. Proceeding to validation.")
+            return
+
+        if not impl_team:
+            print(
+                "Peer review requested changes, but no implementation teammates are available to address them. "
+                "Proceeding to validation with the review risk recorded.",
+                file=sys.stderr,
+            )
+            return
+
+        print("Peer review requested changes. Addressing review comments before re-review.")
+        fix_label = f"peer-fix-{fix_round}-{peer_round}"
+        update_phase(run_dir, fix_label)
+        fix_dir = run_dir / "phases" / fix_label
+        fix_dir.mkdir(parents=True, exist_ok=True)
+
+        if args.dry_run:
+            for teammate in impl_team:
+                (fix_dir / f"{teammate.name}.md").write_text(
+                    "Dry-run peer-review fix.\nSTATUS: DONE\n",
+                    encoding="utf-8",
+                )
+                update_status(run_dir, teammate.name, f"{fix_label}-dry-run", 0)
+        else:
+            with ThreadPoolExecutor(max_workers=max(1, len(impl_team))) as executor:
+                futures = {
+                    executor.submit(
+                        run_phase_agent,
+                        args,
+                        run_dir,
+                        teammate,
+                        fix_label,
+                        _mvp_peer_fix_prompt(
+                            run_dir,
+                            teammate,
+                            plan_dir,
+                            delivery_dirs,
+                            review_dir,
+                            fix_round,
+                            peer_round,
+                        ),
+                        fix_dir / f"{teammate.name}.md",
+                        run_dir / "logs" / f"{fix_label}-{teammate.name}.jsonl",
+                    ): teammate
+                    for teammate in impl_team
+                }
+                for future in as_completed(futures):
+                    rc = future.result()
+                    print(f"  {futures[future].name} peer-review fix done (rc={rc})")
+
+        append_messages(run_dir, str(fix_dir.relative_to(run_dir)))
+        pause_for_questions(args, run_dir, f"after {fix_label}")
+        run_project_manager_reports(args, run_dir, reporting, f"after {fix_label}", args.mode, edit_allowed)
+        peer_round += 1
+
+
 def run_mvp_pipeline(
     args: argparse.Namespace,
     teammates: list[Teammate],
@@ -1046,6 +1413,9 @@ def run_mvp_pipeline(
                 rc = future.result()
                 print(f"  {futures[future].name} done (rc={rc})")
 
+    rc = create_mvp_planning_documents(args, run_dir, plan_dir)
+    if rc != 0:
+        return rc
     append_messages(run_dir, str(plan_dir.relative_to(run_dir)))
     pause_for_questions(args, run_dir, "after planning")
     run_project_manager_reports(args, run_dir, reporting, "after planning", args.mode, edit_allowed)
@@ -1091,6 +1461,18 @@ def run_mvp_pipeline(
         pause_for_questions(args, run_dir, f"after {phase_key}")
         run_project_manager_reports(args, run_dir, reporting, f"after {phase_key}", args.mode, edit_allowed)
 
+        run_mvp_peer_review_loop(
+            args,
+            run_dir,
+            planning,
+            impl_team,
+            validators,
+            reporting,
+            plan_dir,
+            fix_round,
+            edit_allowed,
+        )
+
         # ── Validation ────────────────────────────────────────────────────────
         val_label = f"validate-{fix_round}"
         print(f"\n=== Validation (round {fix_round}) ===")
@@ -1098,10 +1480,7 @@ def run_mvp_pipeline(
         val_dir = run_dir / "phases" / val_label
         val_dir.mkdir(parents=True, exist_ok=True)
 
-        impl_dirs = [
-            run_dir / "phases" / (f"fix-{r}" if r else "implement")
-            for r in range(fix_round + 1)
-        ]
+        impl_dirs = mvp_delivery_dirs(run_dir)
 
         if args.dry_run:
             for v in validators:

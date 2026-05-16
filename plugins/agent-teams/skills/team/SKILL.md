@@ -21,7 +21,7 @@ Check if the user already included `--mode` in `$ARGUMENTS`.
 
   > Which mode would you like to run?
   >
-  > 1. **mvp** *(default)* — autonomous plan → implement → validate → fix → deliver
+  > 1. **mvp** *(default)* — autonomous planning docs → implement → peer review → validate → fix → deliver
   > 2. **review** — read-only team review, no file edits
   > 3. **research** — read-only discovery and analysis
   > 4. **implement-plan** — implement an existing plan (edits enabled)
@@ -32,7 +32,7 @@ Check if the user already included `--mode` in `$ARGUMENTS`.
 
 ### Step 2 — Build the command
 
-Extract any additional flags the user included (`--team-size`, `--roles`, `--model`, `--max-fix-rounds`, `--agent-timeout-seconds`, `--idle-timeout-seconds`, `--no-edit`, `--pause-for-questions`, `--dry-run`). Put only the plain task text in `--task`.
+Extract any additional flags the user included (`--team-size`, `--roles`, `--model`, `--max-fix-rounds`, `--agent-timeout-seconds`, `--idle-timeout-seconds`, `--no-edit`, `--pause-for-questions`, `--skip-peer-review`, `--dry-run`). Put only the plain task text in `--task`.
 
 ```bash
 AGENT_TEAMS_SCRIPT="$(python3 - <<'PY'
@@ -75,7 +75,7 @@ When the script finishes:
 
 | Mode | Edits | Description |
 |---|---|---|
-| `mvp` | ✅ yes | Plan → implement → validate → fix loop → deliver. Default. |
+| `mvp` | ✅ yes | Planning docs → implement → peer-review loop → validate → fix loop → deliver. Default. |
 | `review` | ❌ no | Parallel team review with peer round and lead synthesis |
 | `research` | ❌ no | Lightweight discovery, defaults to 4 teammates including project-manager |
 | `implement-plan` | ✅ yes | Implement an existing plan (requires `--allow-edit`) |
@@ -84,18 +84,20 @@ When the script finishes:
 
 When mode is `mvp`, the pipeline runs fully autonomously:
 
-1. **Planning** — product-owner + dev-lead define requirements and architecture (read-only)
+1. **Planning** — product-owner + dev-lead define initial requirements and architecture, then canonical docs are created: `requirements-plan.md`, `hld.md`, `lld.md`, and `implementation-plan.md` (read-only for code)
 2. **Reporting checkpoints** — project-manager answers `questions.md` in `project-status.md`
 3. **Implementation** — developers build in parallel, reading planning outputs (edits on)
-4. **Validation** — tester checks against requirements → `STATUS: PASS` or `STATUS: FAIL`
-5. **Fix loop** — if fail, developers fix only what failed (up to `--max-fix-rounds`, default 2)
-6. **Synthesis** — lead writes the final MVP handoff document (`summary.md`)
+4. **Peer review** — reviewers check the implementation against the Requirement Plan, HLD, LLD, and Implementation Plan before validation
+5. **Review fix loop** — if peer review gives comments (`STATUS: CHANGES_REQUESTED`), developers address the comments and peer review runs again until all reviewers return `STATUS: APPROVED`
+6. **Validation** — tester checks against task requirements and planning docs → `STATUS: PASS` or `STATUS: FAIL`
+7. **Fix loop** — if validation fails, developers fix only what failed, then peer review repeats before re-validation (up to `--max-fix-rounds`, default 2)
+8. **Synthesis** — lead writes the final MVP handoff document (`summary.md`)
 
 ## Default Team
 
 ```
-product-owner    Requirements, users, scope, acceptance criteria    → planning
-dev-lead         Architecture, work breakdown, integration risks    → planning
+product-owner    Requirements, users, scope, acceptance criteria    → planning docs
+dev-lead         Architecture, work breakdown, integration risks    → planning docs
 project-manager  Progress, blockers, stakeholder questions          → reporting
 developer-1      First implementation area or primary code path     → implement
 developer-2      Second area or adjacent integration points         → implement
@@ -125,7 +127,7 @@ Use `--team-size` (up to 11) to expand. Larger teams add: UX designer, security 
 --idle-timeout-seconds 600
 --no-edit                  # disable edits even in mvp mode
 --pause-for-questions      # stop at reporting checkpoints for user questions
---skip-peer-review
+--skip-peer-review        # skip peer review loop (including mvp pre-validation review)
 --dry-run
 ```
 

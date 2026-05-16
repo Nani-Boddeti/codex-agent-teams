@@ -1,4 +1,0 @@
-interface:
-  display_name: "Agent Teams"
-  short_description: "Run coordinated Codex teammate sessions from one task"
-  default_prompt: "Use Agent Teams to split this task across a coordinated Codex project team."
