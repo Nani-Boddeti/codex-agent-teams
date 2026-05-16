@@ -10,6 +10,19 @@ Run a coordinated group of Codex exec teammates for the requested task.
 
 The user invoked this command with: $ARGUMENTS
 
+## Core behavior
+
+This skill is a delegation wrapper. For every non-empty `$ARGUMENTS` request, route the user's task to the Agent Teams runner and let the team perform the work. Do not satisfy the request as a solo Codex answer, solo code edit, solo review, or solo research task.
+
+The only work to do before launching the runner is:
+- Parse flags and task text
+- Ask for mode when `--mode` is missing
+- Build and execute the `agent_team.py` command
+
+After the runner finishes, report the team workspace, summarize `summary.md`, and mention teammate failures. If the runner cannot be found or fails before creating a usable workspace, report that failure instead of doing the task yourself.
+
+The runner performs a final self-review phase after synthesis. It writes `self-review.md` with reusable learnings from the run. When the current workspace is the Agent Teams plugin repo and edits are allowed, this phase may update the skill/plugin docs or runner with small, general improvements learned from the completed run.
+
 ## Instructions
 
 ### Step 1 — Parse arguments
@@ -69,6 +82,7 @@ python3 "$AGENT_TEAMS_SCRIPT" \
 When the script finishes:
 - Report the team workspace path
 - Summarize the final `summary.md`
+- Summarize `self-review.md` if it exists, including whether the skill updated itself
 - List any teammate failures from `roster.json`
 
 ## Modes
@@ -92,6 +106,7 @@ When mode is `mvp`, the pipeline runs fully autonomously:
 6. **Validation** — tester checks against task requirements and planning docs → `STATUS: PASS` or `STATUS: FAIL`
 7. **Fix loop** — if validation fails, developers fix only what failed, then peer review repeats before re-validation (up to `--max-fix-rounds`, default 2)
 8. **Synthesis** — lead writes the final MVP handoff document (`summary.md`)
+9. **Self-review and learning** — final reviewer records reusable process learnings in `self-review.md`; when running inside the Agent Teams repo with edits enabled, it may make small updates to the skill/plugin based on those learnings
 
 ## Default Team
 

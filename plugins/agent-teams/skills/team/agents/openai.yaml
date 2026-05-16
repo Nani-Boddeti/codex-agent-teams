@@ -1,4 +1,4 @@
 interface:
   display_name: "Agent Teams"
-  short_description: "Run coordinated Codex teammate sessions from one task"
-  default_prompt: "Use Agent Teams to split this task across a coordinated Codex project team."
+  short_description: "Delegate a task to coordinated Codex teammates"
+  default_prompt: "Delegate this task to Agent Teams and report the team result."

@@ -2,6 +2,8 @@
 
 Autonomous multi-agent delivery for Codex. Give it a task — a product idea, a feature, a bug fix — and a coordinated team of Codex agents plans, implements, validates, and delivers a working result with no user interaction in between.
 
+Each run ends with a self-review phase. The team records reusable learnings in `self-review.md`; when the run is happening inside this plugin repo with edits enabled, it can make small updates to the Agent Teams skill/plugin itself based on those learnings.
+
 ## Install
 
 **Option 1 — Codex marketplace (recommended):**
@@ -27,6 +29,8 @@ curl -fsSL https://raw.githubusercontent.com/Nani-Boddeti/codex-agent-teams/main
 Restart Codex after the command finishes. In Codex, invoke the plugin from the composer with `$agent-teams` or by selecting **Agent Teams** from the plugin picker.
 
 ## Usage
+
+Agent Teams is a delegation wrapper: when you invoke `$agent-teams`, the prompt is handed to the coordinated team runner instead of being handled as a solo Codex response.
 
 ```text
 $agent-teams build a CLI task manager with add, list, and done commands
@@ -57,6 +61,7 @@ Phase 3 — Peer review  reviewers check implementation before validation
 Phase 4 — Validate     tester checks against requirements/docs → STATUS: PASS or STATUS: FAIL
             Fix loop   if FAIL, developers fix only what failed, then peer review repeats before validation
 Phase 5 — Synthesis    lead writes the final MVP handoff document (summary.md)
+Phase 6 — Self-review  final reviewer records learnings and may update the skill/plugin itself
 ```
 
 ### More examples
@@ -183,6 +188,7 @@ phases/validate-1/<name>.md      Re-validation after fix
 reports/<checkpoint>-<name>.md   Project-manager status reports and answers
 logs/<phase>-<name>.jsonl        Raw Codex JSONL events
 summary.md                       Final MVP delivery document
+self-review.md                   Final process learning report and skill self-update notes
 ```
 
 ## Verify

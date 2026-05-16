@@ -1100,6 +1100,55 @@ Be direct and actionable. This is the handoff document.
 """
 
 
+def _self_review_prompt(run_dir: Path, mode: str, edit_allowed: bool, self_update_allowed: bool) -> str:
+    update_policy = (
+        "You may edit the Agent Teams plugin files listed below if there is a concrete reusable learning."
+        if self_update_allowed
+        else "Do not edit files. Write the self-review report only."
+    )
+    return f"""You are the final self-reviewer for the Agent Teams skill and runner.
+
+Workspace: {run_dir}
+Mode: {mode}
+Edit policy: {update_policy}
+
+Read the completed run:
+- task.md
+- roster.json
+- tasks.json
+- messages.md
+- summary.md
+- project-status.md
+- all files under phases/
+- all files under reports/
+- all files under reviews/
+
+Your job:
+- Identify learnings about the Agent Teams process itself: delegation quality, planning docs, peer review, validation, fix loops, reporting, timeouts, prompts, or handoff quality.
+- Separate reusable process/tooling learnings from task-specific details.
+- If no reusable learning exists, say so clearly.
+
+If self-update is allowed and there are concrete reusable learnings:
+- Update only the Agent Teams skill/plugin documentation or runner behavior needed to capture the learning.
+- Preferred files are:
+  - plugins/agent-teams/skills/team/SKILL.md
+  - plugins/agent-teams/skills/team/agents/openai.yaml
+  - plugins/agent-teams/.codex-plugin/plugin.json
+  - README.md
+  - plugins/agent-teams/scripts/agent_team.py
+- Keep updates small and general. Do not add task-specific product/domain details.
+- Do not rewrite unrelated sections or revert user changes.
+
+Output requirements:
+- Start with `Self review`.
+- Include sections: Learnings, Updates Made, Skipped Updates, Risks.
+- List exact files changed, or say `No files changed`.
+- End with exactly one of:
+  STATUS: UPDATED
+  STATUS: NO_CHANGES
+"""
+
+
 def project_manager_prompt(
     run_dir: Path,
     teammate: Teammate,
@@ -1365,6 +1414,53 @@ def run_mvp_peer_review_loop(
         peer_round += 1
 
 
+def agent_teams_self_update_allowed(args: argparse.Namespace, edit_allowed: bool) -> bool:
+    if args.dry_run or not edit_allowed:
+        return False
+    cwd = Path(args.cwd).resolve()
+    return (
+        (cwd / "plugins" / "agent-teams" / "skills" / "team" / "SKILL.md").exists()
+        and (cwd / "plugins" / "agent-teams" / "scripts" / "agent_team.py").exists()
+        and (cwd / "plugins" / "agent-teams" / ".codex-plugin" / "plugin.json").exists()
+    )
+
+
+def run_self_review_phase(
+    args: argparse.Namespace,
+    run_dir: Path,
+    mode: str,
+    edit_allowed: bool,
+) -> None:
+    print("\n=== Self Review and Learning ===")
+    update_phase(run_dir, "self-review")
+    report = run_dir / "self-review.md"
+    log = run_dir / "logs" / "self-review.jsonl"
+    self_update_allowed = agent_teams_self_update_allowed(args, edit_allowed)
+
+    if args.dry_run:
+        report.write_text(
+            "Self review\n\n"
+            "Learnings: Dry run only.\n"
+            "Updates Made: No files changed.\n"
+            "Skipped Updates: Dry run does not update the skill.\n"
+            "Risks: None.\n\n"
+            "STATUS: NO_CHANGES\n",
+            encoding="utf-8",
+        )
+        return
+
+    rc = run_codex(
+        args,
+        _self_review_prompt(run_dir, mode, edit_allowed, self_update_allowed),
+        report,
+        log,
+    )
+    if rc != 0:
+        print("Self-review phase failed; inspect prior delivery outputs manually.", file=sys.stderr)
+    else:
+        print(f"Self-review complete. Report: {report}")
+
+
 def run_mvp_pipeline(
     args: argparse.Namespace,
     teammates: list[Teammate],
@@ -1539,6 +1635,7 @@ def run_mvp_pipeline(
             print("Lead synthesis failed; inspect phase outputs manually.", file=sys.stderr)
             return rc
 
+    run_self_review_phase(args, run_dir, args.mode, edit_allowed)
     print(f"\nMVP delivery complete. Summary: {summary}")
     return 0
 
@@ -1939,6 +2036,7 @@ def main() -> int:
             print("Lead synthesis failed; inspect outbox files manually.", file=sys.stderr)
             return rc
 
+    run_self_review_phase(args, run_dir, args.mode, edit_allowed)
     print(f"Agent team summary: {summary}")
     return 0
 
